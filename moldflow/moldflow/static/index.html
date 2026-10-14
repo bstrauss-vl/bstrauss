@@ -59,6 +59,10 @@
     border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: none; align-items: center; gap: 10px; }
   #timebar input[type=range] { flex: 1; }
   #timebar span { font-family: var(--mono); font-size: 12px; min-width: 70px; text-align: right; }
+  #timebar .ghostctl { display: flex; align-items: center; gap: 6px; border-left: 1px solid var(--border); padding-left: 10px; }
+  #timebar .ghostctl input[type=range] { flex: 0 0 90px; width: 90px; }
+  #timebar .ghostctl span { min-width: 34px; }
+  #timebar .ghostctl .lbl { font-family: inherit; font-size: 11px; color: var(--muted); min-width: 0; }
   #summary { position: absolute; left: 10px; bottom: 18px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; max-width: 320px; display: none; }
   #summary .kv { font-size: 12px; }
@@ -186,7 +190,7 @@
       <button class="tbtn" id="shot">Screenshot</button>
     </div>
     <div id="legend"><div class="title"></div><canvas width="26" height="220"></canvas></div>
-    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span></div>
+    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span><div class="ghostctl" title="Opacity of the part that has not filled yet"><span class="lbl">CAD</span><input type="range" id="ghost" min="0" max="100" value="15"><span id="ghostV">15%</span></div></div>
     <div id="summary"></div>
     <div id="hover"></div>
     <div id="spinner"><div class="box">Working…</div></div>
@@ -198,7 +202,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ------------------------------------------------------------------ state
-const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20 };
+const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15 };
 
 // ------------------------------------------------------------------ three.js setup
 const main = document.getElementById('main');
@@ -216,7 +220,61 @@ const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(1, -1.2,
 const fill = new THREE.DirectionalLight(0xffffff, 0.4); fill.position.set(-1.5, 1, -0.5); scene.add(fill);
 const grid = new THREE.GridHelper(200, 20, 0x2b323d, 0x222831); grid.rotation.x = Math.PI / 2; scene.add(grid);
 
-let partMesh = null, edgeLines = null;
+let partMesh = null, edgeLines = null, ghostMesh = null;
+
+// Fill-time clipping. Each vertex carries its fill time; fragments are clipped against uTime so the
+// melt front cuts smoothly through triangles. 'plastic' keeps the filled part (with a bright band at the
+// front), 'ghost' keeps the not-yet-filled part and is drawn as transparent CAD.
+const FU = { uTime: { value: 1e30 }, uBand: { value: 1 }, uFront: { value: 0 } };
+const EDGE_DEFAULT = { color: 0x0b0e12, opacity: 0.55 }, EDGE_GHOST = { color: 0x9aa6b8, opacity: 0.3 };
+function withFillClip(mat, mode) {
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, FU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+attribute float fillTime;
+varying float vFill;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+  vFill = fillTime;`);
+    const clip = mode === 'ghost' ? 'if (vFill <= uTime) discard;' : 'if (vFill > uTime) discard;';
+    let fs = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+uniform float uTime;
+uniform float uBand;
+uniform float uFront;
+varying float vFill;`)
+      .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+  ${clip}`);
+    if (mode === 'plastic') fs = fs.replace('#include <dithering_fragment>', `
+  float fr = uFront * (1.0 - smoothstep(0.0, uBand, uTime - vFill));
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.97, 0.9), 0.8 * fr);
+#include <dithering_fragment>`);
+    sh.fragmentShader = fs;
+  };
+  mat.customProgramCacheKey = () => 'fillclip-' + mode;
+  return mat;
+}
+function setFillAttr(vals) {
+  if (partMesh.userData.fillSrc === vals) return;
+  const a = partMesh.geometry.attributes.fillTime.array;
+  for (let i = 0; i < a.length; i++) { const v = vals[i]; a[i] = (v === null || v === undefined || Number.isNaN(v)) ? 1e9 : v; }
+  partMesh.geometry.attributes.fillTime.needsUpdate = true; partMesh.userData.fillSrc = vals;
+}
+function updateGhost() {
+  document.getElementById('ghostV').textContent = Math.round(S.ghost * 100) + '%';
+  if (!ghostMesh) return;
+  const m = ghostMesh.material; const solid = S.ghost >= 0.99;
+  if (m.transparent === solid) { m.transparent = !solid; m.needsUpdate = true; }
+  m.opacity = S.ghost; m.depthWrite = solid;
+  ghostMesh.visible = S.fillMode && S.ghost > 0.005;
+}
+function setFillMode(on) {
+  S.fillMode = on;
+  if (!on) { FU.uTime.value = 1e30; FU.uFront.value = 0; }
+  const e = on ? EDGE_GHOST : EDGE_DEFAULT;
+  if (edgeLines) { edgeLines.material.color.setHex(e.color); edgeLines.material.opacity = e.opacity; }
+  updateGhost();
+}
 const gateGroup = new THREE.Group(); scene.add(gateGroup);
 const markerGroup = new THREE.Group(); scene.add(markerGroup);
 const raycaster = new THREE.Raycaster();
@@ -257,6 +315,7 @@ function hideLegend() { legend.style.display = 'none'; }
 // ------------------------------------------------------------------ mesh building
 function buildPart(model) {
   if (partMesh) { scene.remove(partMesh); partMesh.geometry.dispose(); partMesh.material.dispose(); }
+  if (ghostMesh) { scene.remove(ghostMesh); ghostMesh.material.dispose(); ghostMesh = null; }
   if (edgeLines) { scene.remove(edgeLines); edgeLines = null; }
   const g = new THREE.BufferGeometry();
   const pos = new Float32Array(model.vertices);
@@ -264,12 +323,17 @@ function buildPart(model) {
   g.setAttribute('basePos', new THREE.BufferAttribute(pos.slice(), 3));
   g.setIndex(new THREE.BufferAttribute(new Uint32Array(model.faces), 1));
   g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(pos.length), 3));
+  g.setAttribute('fillTime', new THREE.BufferAttribute(new Float32Array(pos.length / 3), 1));
   g.computeVertexNormals();
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide, flatShading: false });
+  const m = withFillClip(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide, flatShading: false }), 'plastic');
   partMesh = new THREE.Mesh(g, m); scene.add(partMesh);
+  const gm = withFillClip(new THREE.MeshStandardMaterial({ color: 0xb8c2d0, roughness: 0.6, metalness: 0, side: THREE.DoubleSide,
+    transparent: true, opacity: S.ghost, depthWrite: false }), 'ghost');
+  ghostMesh = new THREE.Mesh(g, gm); ghostMesh.visible = false; ghostMesh.renderOrder = 1; scene.add(ghostMesh);
   const eg = new THREE.EdgesGeometry(g, 25);
   edgeLines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0x0b0e12, transparent: true, opacity: 0.55 }));
   edgeLines.visible = S.wire ?? true; scene.add(edgeLines);
+  setFillMode(false);
   fitView();
 }
 function fitView() {
@@ -381,7 +445,7 @@ function currentVertexValues() {
 function applyView() {
   if (!partMesh) return;
   const v = S.view; const R = S.result;
-  clearMarkers(); setDeform(null, 0);
+  clearMarkers(); setDeform(null, 0); setFillMode(v === 'fill_time' && !!R);
   document.getElementById('timebar').style.display = v === 'fill_time' ? 'flex' : 'none';
   document.getElementById('weldfilter').style.display = v === 'weld' ? 'flex' : 'none';
   document.getElementById('warpscale').style.display = (v === 'warp' || v === 'warp_total') ? 'flex' : 'none';
@@ -402,7 +466,8 @@ function applyView() {
 }
 function renderFillTime() {
   const vals = S.result.fields.fill_time; const hi = pct(vals, 1.0); const tcur = S.time * hi;
-  setColors(vals, 0, hi, { mask: (val) => val <= tcur + 1e-9 });
+  setFillAttr(vals); setColors(vals, 0, hi);
+  FU.uTime.value = tcur + 1e-9; FU.uBand.value = Math.max(hi * 0.02, 1e-6); FU.uFront.value = S.time < 1 ? 1 : 0;
   drawLegend('Fill time (s)', 0, hi);
   document.getElementById('timeV').textContent = fmt(tcur, 3) + ' s';
   document.getElementById('time').value = Math.round(S.time * 1000);
@@ -449,6 +514,7 @@ function stepPlayback() {
 document.getElementById('play').onclick = () => { S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
 document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; renderFillTime(); };
 document.getElementById('weldAngle').oninput = () => renderWeld();
+document.getElementById('ghost').oninput = e => { S.ghost = e.target.value / 100; updateGhost(); };
 document.getElementById('warpScale').oninput = e => { S.warpScale = Math.round(Math.pow(10, +e.target.value)); applyView(); };
 document.getElementById('view').onchange = e => { S.view = e.target.value; applyView(); };
 document.getElementById('wire').onclick = () => { S.wire = !(S.wire ?? true); if (edgeLines) edgeLines.visible = S.wire; document.getElementById('wire').classList.toggle('active', S.wire); };
