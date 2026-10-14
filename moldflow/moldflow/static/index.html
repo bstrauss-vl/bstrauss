@@ -243,7 +243,7 @@ let partMesh = null, edgeLines = null, ghostMesh = null, voxMesh = null;
 // Fill-time clipping. Each vertex carries its fill time; fragments are clipped against uTime so the
 // melt front cuts smoothly through triangles. 'plastic' keeps the filled part (with a bright band at the
 // front), 'ghost' keeps the not-yet-filled part and is drawn as transparent CAD.
-const FU = { uTime: { value: 1e30 }, uBand: { value: 1 }, uFront: { value: 0 }, uMode: { value: 0 }, uHi: { value: 1 }, uShowWeld: { value: 1 } };
+const FU = { uTime: { value: 1e30 }, uMode: { value: 0 }, uHi: { value: 1 }, uShowWeld: { value: 1 } };
 const EDGE_DEFAULT = { color: 0x0b0e12, opacity: 0.55 }, EDGE_GHOST = { color: 0x9aa6b8, opacity: 0.3 };
 function withFillClip(mat, mode) {
   mat.onBeforeCompile = sh => {
@@ -258,15 +258,9 @@ varying float vFill;`)
     let fs = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform float uTime;
-uniform float uBand;
-uniform float uFront;
 varying float vFill;`)
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
   ${clip}`);
-    if (mode === 'plastic') fs = fs.replace('#include <dithering_fragment>', `
-  float fr = uFront * (1.0 - smoothstep(0.0, uBand, uTime - vFill));
-  gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.97, 0.9), 0.8 * fr);
-#include <dithering_fragment>`);
     sh.fragmentShader = fs;
   };
   mat.customProgramCacheKey = () => 'fillclip-' + mode;
@@ -288,7 +282,7 @@ function updateGhost() {
 }
 function setFillMode(on) {
   S.fillMode = on;
-  if (!on) { FU.uTime.value = 1e30; FU.uFront.value = 0; }
+  if (!on) FU.uTime.value = 1e30;
   const e = on ? EDGE_GHOST : EDGE_DEFAULT;
   if (edgeLines) { edgeLines.material.color.setHex(e.color); edgeLines.material.opacity = e.opacity; }
   updateGhost();
@@ -401,7 +395,7 @@ varying float vFill; varying float vWeld;`)
   if (hide) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-uniform float uTime; uniform float uBand; uniform float uFront; uniform float uHi; uniform float uMode; uniform float uShowWeld;
+uniform float uTime; uniform float uHi; uniform float uMode; uniform float uShowWeld;
 uniform sampler2D uBandLUT;
 varying float vFill; varying float vWeld;
 vec3 turbo(float t) {
@@ -415,10 +409,7 @@ vec3 turbo(float t) {
   vec4 bandCol = texture2D(uBandLUT, vec2((clamp(vWeld, 0.0, 180.0) + 0.5) / 181.0, 0.5));
   if (uMode > 0.5 && bandCol.a < 0.5) discard;
   bool weldHi = (uMode > 0.5) || ((uShowWeld > 0.5) && (vWeld < 254.0) && (bandCol.a > 0.5));
-  diffuseColor.rgb = weldHi ? bandCol.rgb : turbo(vFill / uHi);`)
-      .replace('#include <dithering_fragment>', `
-  if (uMode < 0.5 && !weldHi) { float fr = uFront * (1.0 - smoothstep(0.0, uBand, uTime - vFill)); gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.97, 0.9), 0.8 * fr); }
-#include <dithering_fragment>`);
+  diffuseColor.rgb = weldHi ? bandCol.rgb : turbo(vFill / uHi);`);
   };
   mat.customProgramCacheKey = () => 'voxels';
   voxMesh = new THREE.Mesh(g, mat); voxMesh.frustumCulled = false; voxMesh.visible = false; scene.add(voxMesh);
@@ -660,7 +651,7 @@ function applyView() {
 function renderFillTime() {
   const vals = S.result.fields.fill_time; const hi = S.vol ? S.vol.t_max : pct(vals, 1.0); const tcur = S.time * hi;
   if (voxMesh) { FU.uMode.value = 0; FU.uHi.value = Math.max(hi, 1e-9); FU.uShowWeld.value = S.showWeld ? 1 : 0; } else { setFillAttr(vals); setColors(vals, 0, hi); }
-  FU.uTime.value = tcur + 1e-9; FU.uBand.value = Math.max(hi * 0.02, 1e-6); FU.uFront.value = S.time < 1 ? 1 : 0;
+  FU.uTime.value = tcur + 1e-9;
   drawLegend('Fill time (s)' + (voxMesh && S.showWeld ? '  ·  weld lines by category' : ''), 0, hi);
   updateBandPanel();
   document.getElementById('timeV').textContent = fmt(tcur, 3) + ' s';
@@ -669,7 +660,7 @@ function renderFillTime() {
 function renderWeld() {
   hideLegend(); updateBandPanel();   // the category panel is the legend here
   if (voxMesh) {   // weld voxels through the whole wall, inside the transparent CAD; ranges from the panel
-    FU.uMode.value = 1; FU.uTime.value = -1e30; FU.uFront.value = 0; return;
+    FU.uMode.value = 1; FU.uTime.value = -1e30; return;
   }
   setGray(); const W = S.result.weld;
   const n = W.angle.length; const r = partScale() * 0.0045;
