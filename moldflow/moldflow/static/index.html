@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>moldflow — quick injection molding simulation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%234fa3ff%27/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #14171c; --panel: #1d2128; --panel2: #242a33; --border: #323a46;
+    --text: #e6e9ee; --muted: #93a0b2; --accent: #4fa3ff; --accent2: #ffb347; --danger: #ff6b6b; --ok: #5ad17a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: grid; grid-template-columns: 340px 1fr; height: 100%; }
+  #side { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; padding: 14px 14px 30px; }
+  #main { position: relative; min-width: 0; }
+  canvas { display: block; }
+  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .3px; }
+  h1 small { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 6px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 18px 0 8px; }
+  .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  label { display: block; color: var(--muted); font-size: 11px; margin: 8px 0 3px; }
+  select, input[type=number], input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  input[type=range] { width: 100%; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  button { background: var(--accent); color: #0b1320; border: 0; border-radius: 6px; padding: 8px 12px; font-weight: 600; cursor: pointer; font-size: 13px; }
+  button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: transparent; color: var(--danger); border: 1px solid var(--border); padding: 2px 8px; font-weight: 500; }
+  button:disabled { opacity: .45; cursor: default; }
+  #drop { border: 1.5px dashed var(--border); border-radius: 8px; padding: 16px; text-align: center; color: var(--muted); cursor: pointer; }
+  #drop.over { border-color: var(--accent); color: var(--text); }
+  #drop input { display: none; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; }
+  .kv div:nth-child(odd) { color: var(--muted); }
+  .kv div:nth-child(even) { font-family: var(--mono); text-align: right; }
+  .gate { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .gate:last-child { border-bottom: 0; }
+  .hint { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
+  #status { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
+  #status.err { color: var(--danger); }
+  #status.ok { color: var(--ok); }
+  /* overlay UI in viewer */
+  #topbar { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+  #topbar > * { pointer-events: auto; }
+  #topbar select { width: auto; min-width: 190px; background: rgba(29,33,40,.92); }
+  .tbtn { background: rgba(29,33,40,.92); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-weight: 500; }
+  .tbtn.active { border-color: var(--accent); color: var(--accent); }
+  #legend { position: absolute; right: 92px; top: 66px; width: 26px; height: 260px; display: none; }
+  #legend canvas { width: 26px; height: 220px; border-radius: 4px; border: 1px solid var(--border); }
+  #legend .lab { position: absolute; left: 34px; font-family: var(--mono); font-size: 11.5px; white-space: nowrap; color: var(--text); text-shadow: 0 0 4px #000; }
+  #legend .title { position: absolute; right: -60px; top: -24px; text-align: right; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  #timebar { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(620px, 80%); background: rgba(29,33,40,.92);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: none; align-items: center; gap: 10px; }
+  #timebar input[type=range] { flex: 1; }
+  #timebar span { font-family: var(--mono); font-size: 12px; min-width: 70px; text-align: right; }
+  #summary { position: absolute; left: 10px; bottom: 18px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; max-width: 320px; display: none; }
+  #summary .kv { font-size: 12px; }
+  #summary h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+  #hover { position: absolute; pointer-events: none; background: rgba(13,16,20,.92); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 8px; font-family: var(--mono); font-size: 11.5px; display: none; }
+  #spinner { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(20,23,28,.55); font-size: 14px; }
+  #spinner .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 22px; }
+  .warn { color: var(--accent2); }
+  a { color: var(--accent); }
+  #weldfilter { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+  #weldfilter input { width: 140px; }
+  #warpscale { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+  #warpscale input[type=range] { width: 120px; }
+  .mono { font-family: var(--mono); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "/static/vendor/three.module.js", "three/addons/controls/OrbitControls.js": "/static/vendor/OrbitControls.js" } }
+</script>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <h1>moldflow <small>quick injection-molding simulation</small></h1>
+    <div class="hint">Upload a STEP → pick a material → click the part to place a gate → Run.</div>
+
+    <h2>1 · Part</h2>
+    <div id="drop">
+      <input type="file" id="file" accept=".step,.stp,.stl,.obj,.ply">
+      <div><b>Drop a .step file</b> or click to browse</div>
+      <div class="hint">Units are read as millimetres.</div>
+    </div>
+    <label>Mesh resolution</label>
+    <select id="resolution">
+      <option value="coarse">Coarse (≈50k cells, fastest)</option>
+      <option value="medium" selected>Medium (≈120k cells)</option>
+      <option value="fine">Fine (≈250k cells)</option>
+      <option value="ultra">Ultra (≈500k cells, slow)</option>
+    </select>
+    <div id="partinfo" class="card" style="display:none; margin-top:10px">
+      <div class="kv" id="partkv"></div>
+    </div>
+
+    <h2>2 · Material</h2>
+    <select id="material"></select>
+    <div class="card" style="margin-top:8px">
+      <div class="kv" id="matkv"></div>
+      <div class="hint" id="matnotes"></div>
+    </div>
+
+    <h2>3 · Gates <span class="pill" id="gatecount">0</span></h2>
+    <div class="card">
+      <div id="gates"><div class="hint">Click on the model to add a gate. Shift-click removes the nearest one.</div></div>
+      <div style="display:flex; gap:6px; margin-top:8px; align-items:center">
+        <input type="text" id="gateXYZ" placeholder="x, y, z (mm)" class="mono" style="flex:1">
+        <button class="secondary" id="addGateXYZ" title="Add a gate at typed coordinates (snapped to the nearest surface point)">Add</button>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:8px">
+        <button class="secondary" id="clearGates">Clear gates</button>
+        <button class="secondary" id="autoGate" title="Place one gate at the surface point nearest the part centroid">Auto gate</button>
+      </div>
+      <label>Gate diameter (mm)</label>
+      <input type="number" id="gate_d" value="1.5" step="0.1" min="0.3">
+    </div>
+
+    <h2>4 · Process</h2>
+    <div class="card">
+      <div class="row">
+        <div><label>Injection time (s)</label><input type="number" id="t_inj" placeholder="auto" step="0.1" min="0.1"></div>
+        <div><label>Packing quality 0–1</label><input type="number" id="pack" value="1.0" step="0.1" min="0" max="1"></div>
+      </div>
+      <div class="row3">
+        <div><label>Melt °C</label><input type="number" id="t_melt" placeholder="mat."></div>
+        <div><label>Mold °C</label><input type="number" id="t_mold" placeholder="mat."></div>
+        <div><label>Eject °C</label><input type="number" id="t_ej" placeholder="mat."></div>
+      </div>
+      <div class="row">
+        <div><label>Core/cavity ΔT (°C)</label><input type="number" id="dT" value="0" step="1"></div>
+        <div><label>Mold open axis</label>
+          <select id="axis"><option value="z" selected>Z</option><option value="x">X</option><option value="y">Y</option></select></div>
+      </div>
+      <label><input type="checkbox" id="warp" checked style="width:auto; margin-right:6px">Run warpage FEA</label>
+      <label>Warpage mesh budget (elements)</label>
+      <select id="warpel">
+        <option value="20000">20k (fast)</option>
+        <option value="40000" selected>40k</option>
+        <option value="80000">80k (slow, better bending)</option>
+      </select>
+    </div>
+
+    <button id="run" disabled style="width:100%; padding:10px">Run simulation</button>
+    <div id="status"></div>
+
+    <h2>Results</h2>
+    <div class="card" id="results" style="display:none"><div class="kv" id="reskv"></div>
+      <div class="hint" id="restime"></div></div>
+    <div class="card" id="exportcard" style="display:none">
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin-bottom:6px">CAD export (STEP frame)</div>
+      <div class="hint" id="exportinfo"></div>
+      <div id="exportlinks" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px"></div>
+    </div>
+    <div class="hint" style="margin-top:14px">Fast engineering approximation (Hele-Shaw fill, slab cooling, eigenstrain warpage). Compare gate locations and design variants; don't quote pressures. See README for assumptions.</div>
+  </aside>
+
+  <section id="main">
+    <div id="topbar">
+      <select id="view">
+        <option value="thickness">Wall thickness (mm)</option>
+        <option value="fill_time">Fill time (s)</option>
+        <option value="weld">Weld / knit lines</option>
+        <option value="air">Air traps / last to fill</option>
+        <option value="pressure_eof">Pressure at end of fill (MPa)</option>
+        <option value="front_temp">Melt front temperature (°C)</option>
+        <option value="frozen_fraction">Frozen layer at EOF (fraction)</option>
+        <option value="cooling_time">Cooling time to eject (s)</option>
+        <option value="shrinkage_pct">Local shrinkage (%)</option>
+        <option value="warp">Warpage – distortion (mm)</option>
+        <option value="warp_total">Deflection – incl. shrink (mm)</option>
+        <option value="gate_label">Gate region</option>
+      </select>
+      <div id="weldfilter"><span class="hint" style="margin:0">meeting angle &lt;</span><input type="range" id="weldAngle" min="10" max="180" value="135"><span class="mono" id="weldAngleV">135°</span></div>
+      <div id="warpscale"><span class="hint" style="margin:0">scale ×</span><input type="range" id="warpScale" min="0" max="3" step="0.05" value="1.3"><span class="mono" id="warpScaleV">20</span></div>
+      <button class="tbtn" id="wire">Edges</button>
+      <button class="tbtn" id="fit">Fit</button>
+      <button class="tbtn" id="shot">Screenshot</button>
+    </div>
+    <div id="legend"><div class="title"></div><canvas width="26" height="220"></canvas></div>
+    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span></div>
+    <div id="summary"></div>
+    <div id="hover"></div>
+    <div id="spinner"><div class="box">Working…</div></div>
+  </section>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ------------------------------------------------------------------ state
+const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20 };
+
+// ------------------------------------------------------------------ three.js setup
+const main = document.getElementById('main');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+main.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14171c);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 10000);
+camera.up.set(0, 0, 1);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.12;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 0.9));
+const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(1, -1.2, 1.6); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.4); fill.position.set(-1.5, 1, -0.5); scene.add(fill);
+const grid = new THREE.GridHelper(200, 20, 0x2b323d, 0x222831); grid.rotation.x = Math.PI / 2; scene.add(grid);
+
+let partMesh = null, edgeLines = null;
+const gateGroup = new THREE.Group(); scene.add(gateGroup);
+const markerGroup = new THREE.Group(); scene.add(markerGroup);
+const raycaster = new THREE.Raycaster();
+
+function resize() {
+  const w = main.clientWidth, h = main.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(main); resize();
+(function loop() { requestAnimationFrame(loop); controls.update(); stepPlayback(); renderer.render(scene, camera); })();
+
+// ------------------------------------------------------------------ colormap (turbo approximation)
+function turbo(t) {
+  t = Math.min(1, Math.max(0, t));
+  const r = 34.61 + t * (1172.33 - t * (10793.56 - t * (33300.12 - t * (38394.49 - t * 14825.05))));
+  const g = 23.31 + t * (557.33 + t * (1225.33 - t * (3574.96 - t * (1073.77 + t * 707.56))));
+  const b = 27.2 + t * (3211.1 - t * (15327.97 - t * (27814 - t * (22569.18 - t * 6838.66))));
+  return [r / 255, g / 255, b / 255].map(v => Math.min(1, Math.max(0, v)));
+}
+function fmt(v, nd = 2) { return (v === null || v === undefined || Number.isNaN(v)) ? '–' : Number(v).toFixed(nd); }
+function pct(arr, p) { const a = arr.filter(v => v !== null && !Number.isNaN(v)).sort((x, y) => x - y); if (!a.length) return 0; return a[Math.min(a.length - 1, Math.floor(p * (a.length - 1)))]; }
+
+// ------------------------------------------------------------------ legend
+const legend = document.getElementById('legend');
+function drawLegend(title, lo, hi, unit = '', reversed = false) {
+  legend.style.display = 'block';
+  legend.querySelector('.title').textContent = title;
+  const c = legend.querySelector('canvas'), ctx = c.getContext('2d');
+  for (let y = 0; y < 220; y++) { const t = 1 - y / 219; const [r, g, b] = turbo(reversed ? 1 - t : t); ctx.fillStyle = `rgb(${r * 255},${g * 255},${b * 255})`; ctx.fillRect(0, y, 26, 1); }
+  legend.querySelectorAll('.lab').forEach(e => e.remove());
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * (1 - i / 4); const d = document.createElement('div'); d.className = 'lab';
+    d.style.top = (i * 55 - 7) + 'px'; d.textContent = fmt(v, (hi - lo) < 2 ? 3 : (hi - lo) < 20 ? 2 : 1) + unit; legend.appendChild(d);
+  }
+}
+function hideLegend() { legend.style.display = 'none'; }
+
+// ------------------------------------------------------------------ mesh building
+function buildPart(model) {
+  if (partMesh) { scene.remove(partMesh); partMesh.geometry.dispose(); partMesh.material.dispose(); }
+  if (edgeLines) { scene.remove(edgeLines); edgeLines = null; }
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(model.vertices);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('basePos', new THREE.BufferAttribute(pos.slice(), 3));
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(model.faces), 1));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(pos.length), 3));
+  g.computeVertexNormals();
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide, flatShading: false });
+  partMesh = new THREE.Mesh(g, m); scene.add(partMesh);
+  const eg = new THREE.EdgesGeometry(g, 25);
+  edgeLines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0x0b0e12, transparent: true, opacity: 0.55 }));
+  edgeLines.visible = S.wire ?? true; scene.add(edgeLines);
+  fitView();
+}
+function fitView() {
+  if (!partMesh) return;
+  const box = new THREE.Box3().setFromObject(partMesh); const size = box.getSize(new THREE.Vector3()); const center = box.getCenter(new THREE.Vector3());
+  const r = size.length() / 2; const dist = r / Math.sin((camera.fov * Math.PI / 180) / 2) * 1.1;
+  camera.position.copy(center).add(new THREE.Vector3(0.9, -1.2, 0.9).normalize().multiplyScalar(dist));
+  camera.near = dist / 100; camera.far = dist * 20; camera.updateProjectionMatrix();
+  controls.target.copy(center); controls.update();
+  grid.position.set(center.x, center.y, box.min.z - r * 0.02); grid.scale.setScalar(r / 60);
+}
+function setColors(values, lo, hi, opts = {}) {
+  const col = partMesh.geometry.attributes.color; const a = col.array;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v === null || v === undefined || Number.isNaN(v) || (opts.mask && !opts.mask(v, i))) { a[3 * i] = 0.33; a[3 * i + 1] = 0.35; a[3 * i + 2] = 0.39; continue; }
+    let t = (v - lo) / ((hi - lo) || 1); if (opts.reversed) t = 1 - t;
+    const [r, g, b] = turbo(t); a[3 * i] = r; a[3 * i + 1] = g; a[3 * i + 2] = b;
+  }
+  col.needsUpdate = true;
+}
+function setGray() { const a = partMesh.geometry.attributes.color.array; for (let i = 0; i < a.length; i += 3) { a[i] = 0.62; a[i + 1] = 0.65; a[i + 2] = 0.70; } partMesh.geometry.attributes.color.needsUpdate = true; }
+function setDeform(disp, scale) {
+  const p = partMesh.geometry.attributes.position.array, b = partMesh.geometry.attributes.basePos.array;
+  if (!disp) { p.set(b); } else { for (let i = 0; i < p.length; i++) p[i] = b[i] + scale * disp[i]; }
+  partMesh.geometry.attributes.position.needsUpdate = true; partMesh.geometry.computeVertexNormals(); partMesh.geometry.computeBoundingSphere();
+  if (edgeLines) { scene.remove(edgeLines); edgeLines = new THREE.LineSegments(new THREE.EdgesGeometry(partMesh.geometry, 25), edgeLines.material); edgeLines.visible = S.wire ?? true; scene.add(edgeLines); }
+}
+function clearMarkers() { while (markerGroup.children.length) { const c = markerGroup.children.pop(); c.geometry?.dispose(); c.material?.dispose(); } }
+function partScale() { if (!S.model) return 1; const b = S.model; return Math.hypot(b.bbox_max[0] - b.bbox_min[0], b.bbox_max[1] - b.bbox_min[1], b.bbox_max[2] - b.bbox_min[2]); }
+
+// gates
+function drawGates() {
+  while (gateGroup.children.length) gateGroup.remove(gateGroup.children[0]);
+  const r = partScale() * 0.012;
+  S.gates.forEach((g, i) => {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshStandardMaterial({ color: 0xffb347, emissive: 0x6a4000 }));
+    s.position.set(g[0], g[1], g[2]); gateGroup.add(s);
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(r * 0.9, r * 2.6, 16), new THREE.MeshStandardMaterial({ color: 0xffb347 }));
+    const n = g.normal || [0, 0, 1]; const dir = new THREE.Vector3(...n).normalize();
+    cone.position.set(g[0] + dir.x * r * 2.2, g[1] + dir.y * r * 2.2, g[2] + dir.z * r * 2.2);
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().negate()); gateGroup.add(cone);
+  });
+  const list = document.getElementById('gates');
+  document.getElementById('gatecount').textContent = S.gates.length;
+  if (!S.gates.length) { list.innerHTML = '<div class="hint">Click on the model to add a gate. Shift-click removes the nearest one.</div>'; }
+  else list.innerHTML = S.gates.map((g, i) => `<div class="gate"><span>G${i + 1}  (${fmt(g[0], 1)}, ${fmt(g[1], 1)}, ${fmt(g[2], 1)})</span><button class="danger" data-i="${i}">remove</button></div>`).join('');
+  list.querySelectorAll('button').forEach(b => b.onclick = () => { S.gates.splice(+b.dataset.i, 1); drawGates(); });
+  document.getElementById('run').disabled = !(S.model && S.gates.length);
+}
+
+// picking
+let downPos = null;
+renderer.domElement.addEventListener('pointerdown', e => { downPos = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downPos || Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 4 || !partMesh) return;
+  const hit = pick(e); if (!hit) return;
+  if (e.shiftKey) {
+    if (!S.gates.length) return;
+    let best = 0, bd = Infinity; S.gates.forEach((g, i) => { const d = Math.hypot(g[0] - hit.point.x, g[1] - hit.point.y, g[2] - hit.point.z); if (d < bd) { bd = d; best = i; } });
+    S.gates.splice(best, 1);
+  } else {
+    const n = hit.face.normal.clone().transformDirection(partMesh.matrixWorld);
+    const g = [hit.point.x, hit.point.y, hit.point.z]; g.normal = [n.x, n.y, n.z]; S.gates.push(g);
+  }
+  drawGates();
+});
+function pick(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(m, camera); const hits = raycaster.intersectObject(partMesh, false); return hits[0] || null;
+}
+// hover readout
+const hover = document.getElementById('hover');
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!partMesh) { hover.style.display = 'none'; return; }
+  const hit = pick(e);
+  if (!hit) { hover.style.display = 'none'; return; }
+  const vals = currentVertexValues();
+  let txt = `${fmt(hit.point.x, 1)}, ${fmt(hit.point.y, 1)}, ${fmt(hit.point.z, 1)} mm`;
+  if (vals) { const f = hit.face; const idx = [f.a, f.b, f.c]; const v = idx.map(i => vals.values[i]).filter(x => x !== null && !Number.isNaN(x)); if (v.length) txt += `  ·  ${vals.label}: ${fmt(v.reduce((a, b) => a + b, 0) / v.length, vals.nd)}${vals.unit}`; }
+  hover.textContent = txt; hover.style.display = 'block';
+  const rect = main.getBoundingClientRect(); hover.style.left = (e.clientX - rect.left + 14) + 'px'; hover.style.top = (e.clientY - rect.top + 14) + 'px';
+});
+
+// ------------------------------------------------------------------ views
+const VIEWS = {
+  thickness: { label: 'Wall thickness', unit: ' mm', nd: 2 },
+  fill_time: { label: 'Fill time', unit: ' s', nd: 3 },
+  pressure_eof: { label: 'Pressure at EOF', unit: ' MPa', nd: 1 },
+  front_temp: { label: 'Front temperature', unit: ' °C', nd: 0 },
+  frozen_fraction: { label: 'Frozen fraction', unit: '', nd: 2 },
+  cooling_time: { label: 'Cooling time', unit: ' s', nd: 1 },
+  shrinkage_pct: { label: 'Shrinkage', unit: ' %', nd: 2 },
+  gate_label: { label: 'Gate', unit: '', nd: 0 },
+  warp: { label: 'Warpage', unit: ' mm', nd: 3 },
+  warp_total: { label: 'Deflection', unit: ' mm', nd: 3 },
+};
+function currentVertexValues() {
+  const v = S.view; const R = S.result;
+  if (v === 'thickness') return S.model ? { values: R?.fields.thickness || S.model.thickness, ...VIEWS.thickness } : null;
+  if (!R) return null;
+  if (v === 'warp') return R.warpage ? { values: R.warpage.mag_warp, ...VIEWS.warp } : null;
+  if (v === 'warp_total') return R.warpage ? { values: R.warpage.mag_total, ...VIEWS.warp_total } : null;
+  if (v === 'weld' || v === 'air') return { values: R.fields.fill_time, ...VIEWS.fill_time };
+  if (R.fields[v]) return { values: R.fields[v], ...VIEWS[v] };
+  return null;
+}
+function applyView() {
+  if (!partMesh) return;
+  const v = S.view; const R = S.result;
+  clearMarkers(); setDeform(null, 0);
+  document.getElementById('timebar').style.display = v === 'fill_time' ? 'flex' : 'none';
+  document.getElementById('weldfilter').style.display = v === 'weld' ? 'flex' : 'none';
+  document.getElementById('warpscale').style.display = (v === 'warp' || v === 'warp_total') ? 'flex' : 'none';
+  if (v === 'thickness') {
+    const vals = R?.fields.thickness || S.model.thickness; const lo = pct(vals, 0.01), hi = pct(vals, 0.99);
+    setColors(vals, lo, hi); drawLegend('Wall thickness (mm)', lo, hi); return;
+  }
+  if (!R) { setGray(); hideLegend(); return; }
+  if (v === 'fill_time') { renderFillTime(); return; }
+  if (v === 'weld') { renderWeld(); return; }
+  if (v === 'air') { renderAir(); return; }
+  if (v === 'warp' || v === 'warp_total') { renderWarp(v === 'warp_total'); return; }
+  if (v === 'gate_label') { const vals = R.fields.gate_label; const hi = Math.max(1, ...vals.filter(x => x !== null)); setColors(vals, 0, hi); drawLegend('Gate region', 1, hi + 1); return; }
+  const vals = R.fields[v]; if (!vals) { setGray(); hideLegend(); return; }
+  const lo = pct(vals, 0.005), hi = pct(vals, 0.995);
+  const rev = (v === 'front_temp');
+  setColors(vals, lo, hi, { reversed: rev }); drawLegend(`${VIEWS[v].label} (${VIEWS[v].unit.trim()})`, lo, hi, '', rev);
+}
+function renderFillTime() {
+  const vals = S.result.fields.fill_time; const hi = pct(vals, 1.0); const tcur = S.time * hi;
+  setColors(vals, 0, hi, { mask: (val) => val <= tcur + 1e-9 });
+  drawLegend('Fill time (s)', 0, hi);
+  document.getElementById('timeV').textContent = fmt(tcur, 3) + ' s';
+  document.getElementById('time').value = Math.round(S.time * 1000);
+}
+function renderWeld() {
+  setGray(); const W = S.result.weld; const maxA = +document.getElementById('weldAngle').value;
+  document.getElementById('weldAngleV').textContent = maxA + '°';
+  const n = W.angle.length; const r = partScale() * 0.0045;
+  const geo = new THREE.SphereGeometry(r, 8, 6); const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.4 }), n);
+  const M = new THREE.Matrix4(); const c = new THREE.Color(); let k = 0;
+  for (let i = 0; i < n; i++) {
+    const a = W.angle[i]; if (a === null || a > maxA) continue;
+    M.makeTranslation(W.points[3 * i], W.points[3 * i + 1], W.points[3 * i + 2]); mesh.setMatrixAt(k, M);
+    const [rr, gg, bb] = turbo(1 - Math.min(1, a / 180)); c.setRGB(rr, gg, bb); mesh.setColorAt(k, c); k++;
+  }
+  mesh.count = k; mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  markerGroup.add(mesh);
+  drawLegend('Meeting angle (°)  red = head-on', 0, 180, '', true);
+}
+function renderAir() {
+  const vals = S.result.fields.fill_time; const hi = pct(vals, 1.0); setColors(vals, 0, hi);
+  const A = S.result.air_traps; const r = partScale() * 0.011;
+  for (let i = 0; i < A.fill_time.length; i++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x404040, transparent: true, opacity: 0.9 }));
+    s.position.set(A.points[3 * i], A.points[3 * i + 1], A.points[3 * i + 2]); markerGroup.add(s);
+  }
+  drawLegend('Fill time (s) · white = last-to-fill pocket', 0, hi);
+}
+function renderWarp(total) {
+  const W = S.result.warpage; if (!W) { setGray(); hideLegend(); return; }
+  const mag = total ? W.mag_total : W.mag_warp; const disp = total ? W.disp_total : W.disp_warp;
+  const hi = pct(mag, 0.995); setColors(mag, 0, hi); setDeform(disp, S.warpScale);
+  document.getElementById('warpScaleV').textContent = fmt(S.warpScale, 0);
+  drawLegend((total ? 'Deflection' : 'Warpage') + ' (mm)', 0, hi);
+}
+// playback
+let lastT = 0;
+function stepPlayback() {
+  if (!S.playing || S.view !== 'fill_time') return;
+  const now = performance.now(); if (now - lastT < 40) return; lastT = now;
+  S.time += 0.008; if (S.time >= 1) { S.time = 1; S.playing = false; document.getElementById('play').textContent = '▶'; }
+  renderFillTime();
+}
+document.getElementById('play').onclick = () => { S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
+document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; renderFillTime(); };
+document.getElementById('weldAngle').oninput = () => renderWeld();
+document.getElementById('warpScale').oninput = e => { S.warpScale = Math.round(Math.pow(10, +e.target.value)); applyView(); };
+document.getElementById('view').onchange = e => { S.view = e.target.value; applyView(); };
+document.getElementById('wire').onclick = () => { S.wire = !(S.wire ?? true); if (edgeLines) edgeLines.visible = S.wire; document.getElementById('wire').classList.toggle('active', S.wire); };
+document.getElementById('wire').classList.add('active');
+document.getElementById('fit').onclick = fitView;
+document.getElementById('shot').onclick = () => { const a = document.createElement('a'); a.download = 'moldflow_' + S.view + '.png'; a.href = renderer.domElement.toDataURL('image/png'); a.click(); };
+
+// ------------------------------------------------------------------ upload
+const drop = document.getElementById('drop'), fileIn = document.getElementById('file');
+drop.onclick = () => fileIn.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]); };
+fileIn.onchange = () => { if (fileIn.files[0]) uploadFile(fileIn.files[0]); };
+const status = document.getElementById('status'), spinner = document.getElementById('spinner');
+function setStatus(msg, cls = '') { status.textContent = msg; status.className = cls; }
+function busy(on, msg) { spinner.style.display = on ? 'flex' : 'none'; if (msg) spinner.querySelector('.box').textContent = msg; }
+
+async function uploadFile(file) {
+  busy(true, `Reading ${file.name} and voxelizing…`); setStatus('Uploading & meshing…');
+  const fd = new FormData(); fd.append('file', file);
+  const res = await fetch('/api/upload?resolution=' + document.getElementById('resolution').value, { method: 'POST', body: fd });
+  busy(false);
+  if (!res.ok) { setStatus((await res.json()).detail || 'Upload failed', 'err'); return; }
+  S.model = await res.json(); S.result = null; S.gates = []; S.view = 'thickness'; document.getElementById('view').value = 'thickness';
+  document.getElementById('results').style.display = 'none'; document.getElementById('summary').style.display = 'none';
+  buildPart(S.model); drawGates(); applyView();
+  const d = S.model.domain;
+  document.getElementById('partinfo').style.display = 'block';
+  document.getElementById('partkv').innerHTML = kv({
+    'File': S.model.name, 'Triangles': S.model.n_faces, 'Size (mm)': S.model.bbox_max.map((v, i) => fmt(v - S.model.bbox_min[i], 1)).join(' × '),
+    'Volume': fmt(d.volume_cm3, 2) + ' cm³', 'Nominal wall': fmt(d.nominal_wall_mm, 2) + ' mm', 'Wall range': `${fmt(d.min_wall_mm, 2)} – ${fmt(d.max_wall_mm, 2)} mm`,
+    'Cells / pitch': `${d.n_voxels.toLocaleString()} / ${fmt(d.pitch_mm, 2)} mm`, 'Watertight': S.model.watertight ? 'yes' : 'no ⚠',
+  });
+  setStatus(`Ready in ${S.model.timings.load_s + S.model.timings.voxelize_s}s. Click the model to place a gate.`, 'ok');
+}
+function kv(obj) { return Object.entries(obj).map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join(''); }
+
+// ------------------------------------------------------------------ materials
+async function loadMaterials() {
+  S.materials = await (await fetch('/api/materials')).json();
+  const sel = document.getElementById('material');
+  sel.innerHTML = S.materials.map(m => `<option value="${m.key}">${m.name}</option>`).join('');
+  sel.onchange = showMaterial; showMaterial();
+}
+function showMaterial() {
+  const m = S.materials.find(x => x.key === document.getElementById('material').value); if (!m) return;
+  document.getElementById('matkv').innerHTML = kv({
+    'Family': m.family + (m.filled ? ', filled' : ''), 'Melt / mold / eject': `${m.melt_temp_c} / ${m.mold_temp_c} / ${m.eject_temp_c} °C`,
+    'η @ 1000 s⁻¹': m.viscosity_1000_at_melt + ' Pa·s', 'Shrinkage': (m.shrinkage * 100).toFixed(2) + ' %', 'E / ν': `${m.E_mpa} MPa / ${m.nu}`,
+    'Cross-WLF n, τ*': `${m.n}, ${(m.tau_star / 1000).toFixed(0)} kPa`,
+  });
+  document.getElementById('matnotes').textContent = m.notes;
+  ['t_melt', 't_mold', 't_ej'].forEach((id, i) => document.getElementById(id).placeholder = [m.melt_temp_c, m.mold_temp_c, m.eject_temp_c][i]);
+}
+
+// ------------------------------------------------------------------ run
+document.getElementById('clearGates').onclick = () => { S.gates = []; drawGates(); };
+document.getElementById('addGateXYZ').onclick = () => {
+  if (!partMesh) return;
+  const v = document.getElementById('gateXYZ').value.split(/[,\s]+/).map(Number).filter(x => !Number.isNaN(x));
+  if (v.length !== 3) { setStatus('Enter three numbers: x, y, z', 'err'); return; }
+  // snap to the nearest surface vertex so the gate sits on the skin
+  const p = partMesh.geometry.attributes.basePos.array; const n = partMesh.geometry.attributes.normal.array; let bi = 0, bd = Infinity;
+  for (let i = 0; i < p.length; i += 3) { const d = (p[i] - v[0]) ** 2 + (p[i + 1] - v[1]) ** 2 + (p[i + 2] - v[2]) ** 2; if (d < bd) { bd = d; bi = i; } }
+  const g = [p[bi], p[bi + 1], p[bi + 2]]; g.normal = [n[bi], n[bi + 1], n[bi + 2]]; S.gates.push(g); drawGates();
+  setStatus(`Gate added at (${fmt(g[0], 1)}, ${fmt(g[1], 1)}, ${fmt(g[2], 1)}), ${fmt(Math.sqrt(bd), 2)} mm from the typed point.`, 'ok');
+};
+document.getElementById('gateXYZ').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('addGateXYZ').click(); });
+document.getElementById('autoGate').onclick = () => {
+  if (!partMesh) return;
+  const c = new THREE.Box3().setFromObject(partMesh).getCenter(new THREE.Vector3());
+  // find the surface vertex nearest the centroid
+  const p = partMesh.geometry.attributes.basePos.array; let bi = 0, bd = Infinity;
+  for (let i = 0; i < p.length; i += 3) { const d = (p[i] - c.x) ** 2 + (p[i + 1] - c.y) ** 2 + (p[i + 2] - c.z) ** 2; if (d < bd) { bd = d; bi = i; } }
+  const g = [p[bi], p[bi + 1], p[bi + 2]]; g.normal = [0, 0, 1]; S.gates = [g]; drawGates();
+};
+const num = id => { const v = document.getElementById(id).value; return v === '' ? null : +v; };
+document.getElementById('run').onclick = async () => {
+  const axis = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[document.getElementById('axis').value];
+  const body = {
+    model_id: S.model.model_id, material: document.getElementById('material').value, gates: S.gates.map(g => [g[0], g[1], g[2]]),
+    injection_time_s: num('t_inj'), melt_temp_c: num('t_melt'), mold_temp_c: num('t_mold'), eject_temp_c: num('t_ej'),
+    gate_diameter_mm: num('gate_d') || 1.5, core_cavity_dT_c: num('dT') || 0, mold_axis: axis, packing_quality: num('pack') ?? 1,
+    run_warpage: document.getElementById('warp').checked, warpage_max_elements: +document.getElementById('warpel').value,
+  };
+  busy(true, 'Simulating fill, welds, cooling' + (body.run_warpage ? ' and warpage…' : '…')); setStatus('Running…');
+  document.getElementById('run').disabled = true;
+  try {
+    const res = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) { setStatus((await res.json()).detail || 'Simulation failed', 'err'); return; }
+    S.result = await res.json(); showResults();
+    S.view = 'fill_time'; document.getElementById('view').value = 'fill_time'; S.time = 1; applyView();
+    setStatus(`Done in ${S.result.timings.total}s.`, 'ok');
+  } catch (e) { setStatus('Error: ' + e.message, 'err'); }
+  finally { busy(false); document.getElementById('run').disabled = false; }
+};
+function showResults() {
+  const s = S.result.summary; const W = S.result.warpage;
+  const weldTxt = s.weld_voxels ? `${s.weld_voxels} cells, worst ${fmt(s.worst_weld_angle_deg, 0)}°` : 'none detected';
+  const frontWarn = s.min_front_temp_c < (s.eject_temp_c + 20) ? ' <span class="warn">⚠ freeze-off risk</span>' : '';
+  const rows = {
+    'Injection time': fmt(s.injection_time_s, 2) + ' s', 'Max flow length': fmt(s.max_flow_length_mm, 0) + ' mm',
+    'Injection pressure': fmt(s.injection_pressure_mpa, 1) + ' MPa', 'Clamp force (est.)': fmt(s.clamp_tonnage_est_t, 1) + ' t  (proj. ' + fmt(s.projected_area_cm2, 0) + ' cm²)',
+    'Min front temp': fmt(s.min_front_temp_c, 0) + ' °C' + frontWarn, 'Frozen at EOF (max)': fmt(100 * s.max_frozen_fraction, 0) + ' %',
+    'Weld lines': weldTxt, 'Air-trap candidates': s.air_trap_count,
+    'Cooling time (98%)': fmt(s.cooling_time_s, 1) + ' s', 'Cycle time (est.)': fmt(s.cycle_time_est_s, 1) + ' s',
+  };
+  if (W) { rows['Max warpage'] = fmt(s.max_warpage_mm, 3) + ' mm'; rows['Max deflection (incl. shrink)'] = fmt(s.max_deflection_total_mm, 3) + ' mm'; rows['FEA'] = `${W.fea_elements.toLocaleString()} hex @ ${fmt(W.fea_pitch_mm, 2)} mm`; }
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('reskv').innerHTML = kv(rows);
+  const ex = S.result.export; const card = document.getElementById('exportcard');
+  if (ex && !ex.error) {
+    card.style.display = 'block';
+    document.getElementById('exportinfo').innerHTML = `${ex.weld_points.toLocaleString()} weld points (${ex.headon_points} head-on), ${ex.air_traps} air-trap pockets written to<br><span class="mono">${ex.dir}</span>`;
+    const names = Object.keys(ex.files || {});
+    document.getElementById('exportlinks').innerHTML = names.map(n => `<a class="pill" href="/api/export/${ex.run_id}/${encodeURIComponent(n)}" download>${n}</a>`).join('');
+  } else { card.style.display = ex ? 'block' : 'none'; if (ex) document.getElementById('exportinfo').textContent = ex.error; document.getElementById('exportlinks').innerHTML = ''; }
+  const t = S.result.timings; document.getElementById('restime').textContent = `fill ${t.fill}s · weld ${t.weld}s · pressure ${t.pressure}s · warpage ${t.warpage}s`;
+  const sm = document.getElementById('summary'); sm.style.display = 'block';
+  sm.innerHTML = `<h3>${s.material} · ${s.n_gates} gate${s.n_gates > 1 ? 's' : ''}</h3><div class="kv">${kv({
+    'Fill': fmt(s.injection_time_s, 2) + ' s', 'P inj': fmt(s.injection_pressure_mpa, 1) + ' MPa', 'Cooling': fmt(s.cooling_time_s, 1) + ' s',
+    'Welds': weldTxt, 'Warpage': W ? fmt(s.max_warpage_mm, 3) + ' mm' : 'off' })}</div>`;
+}
+
+loadMaterials();
+</script>
+</body>
+</html>

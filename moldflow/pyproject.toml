@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moldflow"
+version = "0.1.0"
+description = "Fast engineering-approximation injection molding simulator: fill, knit lines, cooling and warpage on a STEP file."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Benjamin Strauss" }]
+dependencies = [
+    "cadquery>=2.4",
+    "trimesh>=4.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-fmm>=2023.4.2",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "python-multipart>=0.0.9",
+    "pyamg>=5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+moldflow = "moldflow.__main__:main"
+moldflow-cli = "moldflow.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["moldflow*"]
+
+[tool.setuptools.package-data]
+moldflow = ["static/*"]
