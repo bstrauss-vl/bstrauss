@@ -1,6 +1,6 @@
 # moldflow — quick injection-molding simulation on a STEP file
 
-A fast engineering-approximation tool: upload a `.step`, pick a resin, click the part
+A fast engineering-approximation tool: upload a `.step`, pick a resin, pick points on the part
 to place one or more gates, and get an interactive 3D picture of
 
 * **fill pattern** (animated melt front, fill time),
@@ -48,7 +48,8 @@ Then in the UI:
    thickness map appears at once.
 2. **Material** – pick a profile; its Cross-WLF viscosity, temperatures, shrinkage and
    modulus are shown. Edit `moldflow/materials.py` to add your own grades.
-3. **Gates** – click the model to add a gate (shift-click removes the nearest). Gate
+3. **Gates** – add gates with *Pick on model* (arms a single click so orbiting never adds one),
+   *Auto gate*, or typed coordinates; remove them from the list. The marker is a cylinder at the gate diameter. Gate
    diameter sets the size of the injection region.
 4. **Process** – leave injection time on *auto* (estimated from part volume) or set it;
    override melt/mold/eject temperatures; set a **core/cavity ΔT** to drive bending warpage;

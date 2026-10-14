@@ -30,6 +30,7 @@
   .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
   button { background: var(--accent); color: #0b1320; border: 0; border-radius: 6px; padding: 8px 12px; font-weight: 600; cursor: pointer; font-size: 13px; }
   button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  button.secondary.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   button.danger { background: transparent; color: var(--danger); border: 1px solid var(--border); padding: 2px 8px; font-weight: 500; }
   button:disabled { opacity: .45; cursor: default; }
   #drop { border: 1.5px dashed var(--border); border-radius: 8px; padding: 16px; text-align: center; color: var(--muted); cursor: pointer; }
@@ -100,7 +101,7 @@
 <div id="app">
   <aside id="side">
     <h1>moldflow <small>quick injection-molding simulation</small></h1>
-    <div class="hint">Upload a STEP → pick a material → click the part to place a gate → Run.</div>
+    <div class="hint">Upload a STEP → pick a material → place a gate (Pick on model / Auto gate) → Run.</div>
 
     <h2>1 · Part</h2>
     <div id="drop">
@@ -131,14 +132,15 @@
 
     <h2>3 · Gates <span class="pill" id="gatecount">0</span></h2>
     <div class="card">
-      <div id="gates"><div class="hint">Click on the model to add a gate. Shift-click removes the nearest one.</div></div>
+      <div id="gates"><div class="hint">Add a gate with <b>Pick on model</b> (arms one click), typed coordinates, or <b>Auto gate</b>. Remove gates from this list.</div></div>
       <div style="display:flex; gap:6px; margin-top:8px; align-items:center">
         <input type="text" id="gateXYZ" placeholder="x, y, z (mm)" class="mono" style="flex:1">
         <button class="secondary" id="addGateXYZ" title="Add a gate at typed coordinates (snapped to the nearest surface point)">Add</button>
       </div>
       <div style="display:flex; gap:8px; margin-top:8px">
-        <button class="secondary" id="clearGates">Clear gates</button>
+        <button class="secondary" id="pickGate" title="Arm one click on the model to place a gate (Esc cancels)">Pick on model</button>
         <button class="secondary" id="autoGate" title="Place one gate at the surface point nearest the part centroid">Auto gate</button>
+        <button class="secondary" id="clearGates">Clear gates</button>
       </div>
       <label>Gate diameter (mm)</label>
       <input type="number" id="gate_d" value="1.5" step="0.1" min="0.3">
@@ -537,41 +539,49 @@ function clearMarkers() { while (markerGroup.children.length) { const c = marker
 function partScale() { if (!S.model) return 1; const b = S.model; return Math.hypot(b.bbox_max[0] - b.bbox_min[0], b.bbox_max[1] - b.bbox_min[1], b.bbox_max[2] - b.bbox_min[2]); }
 
 // gates
+function gateDiameter() { return Math.max(0.1, parseFloat(document.getElementById('gate_d').value) || 1.5); }
 function drawGates() {
-  while (gateGroup.children.length) gateGroup.remove(gateGroup.children[0]);
-  const r = partScale() * 0.012;
-  S.gates.forEach((g, i) => {
-    const s = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshStandardMaterial({ color: 0xffb347, emissive: 0x6a4000 }));
-    s.position.set(g[0], g[1], g[2]); gateGroup.add(s);
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(r * 0.9, r * 2.6, 16), new THREE.MeshStandardMaterial({ color: 0xffb347 }));
+  while (gateGroup.children.length) { const c = gateGroup.children.pop(); c.geometry?.dispose(); c.material?.dispose(); }
+  const d = gateDiameter();                                   // marker diameter = gate diameter (mm)
+  const h = Math.max(3 * d, partScale() * 0.02);              // length: a stub proportional to the gate, never invisible
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffb347, emissive: 0x6a4000, roughness: 0.4 });
+  const Y = new THREE.Vector3(0, 1, 0);
+  S.gates.forEach(g => {
     const n = g.normal || [0, 0, 1]; const dir = new THREE.Vector3(...n).normalize();
-    cone.position.set(g[0] + dir.x * r * 2.2, g[1] + dir.y * r * 2.2, g[2] + dir.z * r * 2.2);
-    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().negate()); gateGroup.add(cone);
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(d / 2, d / 2, h, 32), mat);
+    cyl.position.set(g[0] + dir.x * h / 2, g[1] + dir.y * h / 2, g[2] + dir.z * h / 2);   // base on the surface, pointing outward
+    cyl.quaternion.setFromUnitVectors(Y, dir); gateGroup.add(cyl);
   });
   const list = document.getElementById('gates');
   document.getElementById('gatecount').textContent = S.gates.length;
-  if (!S.gates.length) { list.innerHTML = '<div class="hint">Click on the model to add a gate. Shift-click removes the nearest one.</div>'; }
+  if (!S.gates.length) { list.innerHTML = '<div class="hint">Add a gate with <b>Pick on model</b> (arms one click), typed coordinates, or <b>Auto gate</b>. Remove gates from this list.</div>'; }
   else list.innerHTML = S.gates.map((g, i) => `<div class="gate"><span>G${i + 1}  (${fmt(g[0], 1)}, ${fmt(g[1], 1)}, ${fmt(g[2], 1)})</span><button class="danger" data-i="${i}">remove</button></div>`).join('');
   list.querySelectorAll('button').forEach(b => b.onclick = () => { S.gates.splice(+b.dataset.i, 1); drawGates(); });
   document.getElementById('run').disabled = !(S.model && S.gates.length);
 }
 
 // picking
+// Gate placement by clicking is armed explicitly (one click per arming) so that orbiting and
+// inspecting results never adds gates by accident.
+function setPicking(on) {
+  S.picking = !!on && !!partMesh;
+  document.getElementById('pickGate').classList.toggle('active', S.picking);
+  renderer.domElement.style.cursor = S.picking ? 'crosshair' : '';
+  if (S.picking) setStatus('Click the model to place a gate (Esc to cancel).');
+}
+document.getElementById('pickGate').onclick = () => setPicking(!S.picking);
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && S.picking) { setPicking(false); setStatus('Gate placement cancelled.'); } });
 let downPos = null;
 renderer.domElement.addEventListener('pointerdown', e => { downPos = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', e => {
-  if (!downPos || Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 4 || !partMesh) return;
-  const hit = pick(e); if (!hit) return;
-  if (e.shiftKey) {
-    if (!S.gates.length) return;
-    let best = 0, bd = Infinity; S.gates.forEach((g, i) => { const d = Math.hypot(g[0] - hit.point.x, g[1] - hit.point.y, g[2] - hit.point.z); if (d < bd) { bd = d; best = i; } });
-    S.gates.splice(best, 1);
-  } else {
-    const n = hit.face.normal.clone().transformDirection(partMesh.matrixWorld);
-    const g = [hit.point.x, hit.point.y, hit.point.z]; g.normal = [n.x, n.y, n.z]; S.gates.push(g);
-  }
-  drawGates();
+  if (!S.picking || !downPos || Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]) > 4 || !partMesh) return;
+  const hit = pick(e); if (!hit) { setStatus('That click missed the model - still armed, try again (Esc to cancel).'); return; }
+  const n = hit.face.normal.clone().transformDirection(partMesh.matrixWorld);
+  const g = [hit.point.x, hit.point.y, hit.point.z]; g.normal = [n.x, n.y, n.z]; S.gates.push(g);
+  setPicking(false); drawGates();
+  setStatus(`Gate G${S.gates.length} placed at (${fmt(g[0], 1)}, ${fmt(g[1], 1)}, ${fmt(g[2], 1)}).`, 'ok');
 });
+document.getElementById('gate_d').oninput = () => drawGates();   // marker size follows the diameter field
 function pick(e) {
   const rect = renderer.domElement.getBoundingClientRect();
   const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -741,7 +751,7 @@ async function uploadFile(file) {
   const res = await fetch('/api/upload?resolution=' + document.getElementById('resolution').value + (custom ? '&target_voxels=' + custom : ''), { method: 'POST', body: fd });
   busy(false);
   if (!res.ok) { setStatus((await res.json()).detail || 'Upload failed', 'err'); return; }
-  S.model = await res.json(); S.result = null; S.gates = []; S.view = 'thickness'; document.getElementById('view').value = 'thickness';
+  S.model = await res.json(); S.result = null; S.gates = []; S.view = 'thickness'; if (S.picking) setPicking(false); document.getElementById('view').value = 'thickness';
   document.getElementById('results').style.display = 'none'; document.getElementById('summary').style.display = 'none';
   buildPart(S.model); drawGates(); applyView();
   const d = S.model.domain;
@@ -751,7 +761,7 @@ async function uploadFile(file) {
     'Volume': fmt(d.volume_cm3, 2) + ' cm³', 'Nominal wall': fmt(d.nominal_wall_mm, 2) + ' mm', 'Wall range': `${fmt(d.min_wall_mm, 2)} – ${fmt(d.max_wall_mm, 2)} mm`,
     'Cells / pitch': `${d.n_voxels.toLocaleString()} / ${fmt(d.pitch_mm, 2)} mm`, 'Watertight': S.model.watertight ? 'yes' : 'no ⚠',
   });
-  setStatus(`Ready in ${S.model.timings.load_s + S.model.timings.voxelize_s}s. Click the model to place a gate.`, 'ok');
+  setStatus(`Ready in ${S.model.timings.load_s + S.model.timings.voxelize_s}s. Add a gate with Pick on model, Auto gate, or typed coordinates.`, 'ok');
 }
 function kv(obj) { return Object.entries(obj).map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join(''); }
 
