@@ -55,7 +55,8 @@ Then in the UI:
    voxel views: the filled plastic (or the weld cells) are drawn as voxels inside a transparent
    ghost of the CAD, so the melt front and welds *inside* thick walls are visible, not just
    their trace on the skin. The *CAD opacity* slider sets the ghost; fill time has a play/scrub
-   bar; weld lines can be filtered by meeting angle; warpage has a deformation-scale slider.
+   bar with a *weld lines* checkbox that highlights weld cells in magenta as the fronts meet;
+   in the weld view they can be filtered by meeting angle; warpage has a deformation-scale slider.
    Hover for values (in the voxel views: the voxel under the cursor), *Screenshot* saves a PNG.
 
 ### CAD export (automatic)
