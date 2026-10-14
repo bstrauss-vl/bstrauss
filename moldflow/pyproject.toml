@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "httpx2>=2.13"]
 
 [project.scripts]
 moldflow = "moldflow.__main__:main"
