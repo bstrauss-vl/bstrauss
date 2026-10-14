@@ -9,3 +9,4 @@ venv/
 .moldflow_cache/
 *.log
 moldflow_results/
+tests/ctrl valve test 01/

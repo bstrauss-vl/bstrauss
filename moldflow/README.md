@@ -74,7 +74,7 @@ CLI `--export-dir`); the UI shows the folder and download links:
 | `<part>_weld_lines.csv` / `.xyz` | x, y, z, meeting angle, fill time, gate id, on-surface flag |
 | `<part>_air_traps.csv`, `<part>_gates.csv`, `<part>_summary.json` | vent candidates, gate positions, headline numbers |
 
-`<part>` is the uploaded file's name without extension (e.g. `VTL-00000246-022_A_1-Control Valve Body`).
+`<part>` is the uploaded file's name without extension (e.g. `ribbed_housing`).
 
 Import the STEP next to the original part (NX: File → Import → STEP; SolidWorks/Creo/Fusion
 also read vertex points) — no transform is needed, the points land on the model.
