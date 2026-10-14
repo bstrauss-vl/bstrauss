@@ -61,7 +61,17 @@
   #timebar span { font-family: var(--mono); font-size: 12px; min-width: 70px; text-align: right; }
   #timebar label.chk { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 12px; color: var(--text); white-space: nowrap;
     border-left: 1px solid var(--border); padding-left: 10px; cursor: pointer; }
-  #timebar label.chk .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #ff40e6; }
+  #weldbands { position: absolute; right: 10px; bottom: 72px; width: 262px; background: rgba(29,33,40,.92); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; display: none; }
+  #weldbands .title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+  #weldbands .hdr, #weldbands .band { display: grid; grid-template-columns: 48px 10px 48px 30px 22px 18px; gap: 4px; align-items: center; margin-bottom: 4px; }
+  #weldbands .hdr { font-size: 10.5px; color: var(--muted); }
+  #weldbands .band { font-family: var(--mono); font-size: 11.5px; }
+  #weldbands input[type=number] { width: 48px; padding: 2px 3px; font-size: 11.5px; }
+  #weldbands input[type=color] { width: 30px; height: 20px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; }
+  #weldbands button.x { background: transparent; color: var(--danger); border: 0; padding: 0; font-size: 15px; line-height: 1; cursor: pointer; }
+  #weldbands .foot { display: flex; gap: 6px; margin-top: 6px; }
+  #weldbands .foot button { padding: 3px 8px; font-size: 11px; }
   #ghostctl { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
   #ghostctl input[type=range] { width: 100px; }
   #summary { position: absolute; left: 10px; bottom: 18px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 8px;
@@ -192,7 +202,13 @@
       <button class="tbtn" id="shot">Screenshot</button>
     </div>
     <div id="legend"><div class="title"></div><canvas width="26" height="220"></canvas></div>
-    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span><label class="chk" title="Highlight weld / knit-line cells as the fronts meet"><input type="checkbox" id="showWeld" checked><span class="sw"></span>weld lines</label></div>
+    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span><label class="chk" title="Highlight weld / knit-line cells as the fronts meet"><input type="checkbox" id="showWeld" checked>weld lines</label></div>
+    <div id="weldbands" title="Weld cells are coloured by the first matching range (meeting angle, degrees); unticked ranges are not highlighted">
+      <div class="title">Weld line categories</div>
+      <div class="hdr"><span>from °</span><span></span><span>to °</span><span>colour</span><span>show</span><span></span></div>
+      <div id="bandrows"></div>
+      <div class="foot"><button class="tbtn" id="bandadd">+ range</button><button class="tbtn" id="bandreset">reset</button></div>
+    </div>
     <div id="summary"></div>
     <div id="hover"></div>
     <div id="spinner"><div class="box">Working…</div></div>
@@ -278,6 +294,49 @@ function setFillMode(on) {
   updateGhost();
 }
 
+// ------------------------------------------------------------------ weld-line categories (fill-time view)
+// Meeting-angle ranges -> colour (or not highlighted). Baked into a 181-entry lookup texture read by the voxel shader.
+const BAND_DEFAULTS = [{ lo: 0, hi: 90, color: '#ff2a2a', show: true }, { lo: 90, hi: 100, color: '#ff9a1f', show: true }, { lo: 100, hi: 180, color: '#9a8cff', show: false }];
+const BAND_KEY = 'moldflow.weldBands';
+function loadBands() { try { const b = JSON.parse(localStorage.getItem(BAND_KEY)); if (Array.isArray(b) && b.length && b.every(x => typeof x.lo === 'number')) return b; } catch (e) {} return BAND_DEFAULTS.map(b => ({ ...b })); }
+S.bands = loadBands();
+const bandLUT = new THREE.DataTexture(new Uint8Array(181 * 4), 181, 1, THREE.RGBAFormat);
+bandLUT.magFilter = bandLUT.minFilter = THREE.NearestFilter; bandLUT.needsUpdate = true;
+FU.uBandLUT = { value: bandLUT };
+function updateBandLUT() {
+  const d = bandLUT.image.data; d.fill(0); const c = new THREE.Color();
+  for (let a = 0; a <= 180; a++) {
+    const b = S.bands.find(b => { const lo = Math.min(b.lo, b.hi), hi = Math.max(b.lo, b.hi); return b.show && a >= lo && (a < hi || (a === 180 && hi >= 180)); });
+    if (!b) continue;
+    c.set(b.color); d[4 * a] = Math.round(c.r * 255); d[4 * a + 1] = Math.round(c.g * 255); d[4 * a + 2] = Math.round(c.b * 255); d[4 * a + 3] = 255;
+  }
+  bandLUT.needsUpdate = true;
+  try { localStorage.setItem(BAND_KEY, JSON.stringify(S.bands)); } catch (e) {}
+}
+function renderBandRows() {
+  const box = document.getElementById('bandrows'); box.innerHTML = '';
+  S.bands.forEach((b, i) => {
+    const row = document.createElement('div'); row.className = 'band';
+    row.innerHTML = `<input type="number" min="0" max="180" step="1" value="${b.lo}" data-k="lo"><span>–</span>` +
+      `<input type="number" min="0" max="180" step="1" value="${b.hi}" data-k="hi"><input type="color" value="${b.color}" data-k="color">` +
+      `<input type="checkbox" ${b.show ? 'checked' : ''} data-k="show"><button class="x" title="remove range">×</button>`;
+    row.querySelectorAll('input').forEach(inp => inp.oninput = () => {
+      const k = inp.dataset.k;
+      b[k] = k === 'show' ? inp.checked : k === 'color' ? inp.value : Math.min(180, Math.max(0, Math.round(+inp.value || 0)));
+      updateBandLUT();
+    });
+    row.querySelector('.x').onclick = () => { S.bands.splice(i, 1); renderBandRows(); updateBandLUT(); };
+    box.appendChild(row);
+  });
+}
+function updateBandPanel() { document.getElementById('weldbands').style.display = (S.view === 'fill_time' && S.showWeld && voxMesh && voxMesh.visible) ? 'block' : 'none'; }
+document.getElementById('bandadd').onclick = () => {
+  const last = S.bands[S.bands.length - 1]; const lo = last ? Math.min(180, Math.max(last.lo, last.hi)) : 0;
+  S.bands.push({ lo, hi: 180, color: '#ffd23a', show: true }); renderBandRows(); updateBandLUT();
+};
+document.getElementById('bandreset').onclick = () => { S.bands = BAND_DEFAULTS.map(b => ({ ...b })); renderBandRows(); updateBandLUT(); };
+renderBandRows(); updateBandLUT();
+
 // ------------------------------------------------------------------ 3-D voxel fields (fill time, weld lines)
 // /api/volume/<run_id>: "MFV1" | u32 header length | JSON header | u32[n] flat index | f32[n] fill time | u8[n] weld angle (255 = none)
 async function loadVolume(url) {
@@ -333,6 +392,7 @@ varying float vFill; varying float vWeld;`)
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform float uTime; uniform float uBand; uniform float uFront; uniform float uHi; uniform float uMode; uniform float uShowWeld;
+uniform sampler2D uBandLUT;
 varying float vFill; varying float vWeld;
 vec3 turbo(float t) {
   t = clamp(t, 0.0, 1.0);
@@ -342,8 +402,9 @@ vec3 turbo(float t) {
   return clamp(vec3(r, g, b) / 255.0, 0.0, 1.0);
 }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-  bool weldHi = (uMode < 0.5) && (uShowWeld > 0.5) && (vWeld < 254.0);
-  diffuseColor.rgb = weldHi ? vec3(1.0, 0.25, 0.9) : turbo((uMode < 0.5) ? vFill / uHi : 1.0 - vWeld / 180.0);`)
+  vec4 bandCol = texture2D(uBandLUT, vec2((clamp(vWeld, 0.0, 180.0) + 0.5) / 181.0, 0.5));
+  bool weldHi = (uMode < 0.5) && (uShowWeld > 0.5) && (vWeld < 254.0) && (bandCol.a > 0.5);
+  diffuseColor.rgb = weldHi ? bandCol.rgb : turbo((uMode < 0.5) ? vFill / uHi : 1.0 - vWeld / 180.0);`)
       .replace('#include <dithering_fragment>', `
   if (uMode < 0.5 && !weldHi) { float fr = uFront * (1.0 - smoothstep(0.0, uBand, uTime - vFill)); gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.97, 0.9), 0.8 * fr); }
 #include <dithering_fragment>`);
@@ -567,6 +628,7 @@ function applyView() {
   if (voxMesh) voxMesh.visible = vox;
   partMesh.visible = !vox;
   document.getElementById('ghostctl').style.display = S.fillMode ? 'flex' : 'none';
+  updateBandPanel();
   document.getElementById('timebar').style.display = v === 'fill_time' ? 'flex' : 'none';
   document.getElementById('weldfilter').style.display = v === 'weld' ? 'flex' : 'none';
   document.getElementById('warpscale').style.display = (v === 'warp' || v === 'warp_total') ? 'flex' : 'none';
@@ -589,7 +651,8 @@ function renderFillTime() {
   const vals = S.result.fields.fill_time; const hi = S.vol ? S.vol.t_max : pct(vals, 1.0); const tcur = S.time * hi;
   if (voxMesh) { FU.uMode.value = 0; FU.uHi.value = Math.max(hi, 1e-9); FU.uShowWeld.value = S.showWeld ? 1 : 0; } else { setFillAttr(vals); setColors(vals, 0, hi); }
   FU.uTime.value = tcur + 1e-9; FU.uBand.value = Math.max(hi * 0.02, 1e-6); FU.uFront.value = S.time < 1 ? 1 : 0;
-  drawLegend('Fill time (s)' + (voxMesh && S.showWeld ? '  ·  magenta = weld line' : ''), 0, hi);
+  drawLegend('Fill time (s)' + (voxMesh && S.showWeld ? '  ·  weld lines by category' : ''), 0, hi);
+  updateBandPanel();
   document.getElementById('timeV').textContent = fmt(tcur, 3) + ' s';
   document.getElementById('time').value = Math.round(S.time * 1000);
 }
@@ -641,7 +704,7 @@ document.getElementById('play').onclick = () => { S.playing = !S.playing; if (S.
 document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; if (S.result) renderFillTime(); };
 document.getElementById('weldAngle').oninput = () => { if (S.result) renderWeld(); };
 document.getElementById('ghost').oninput = e => { S.ghost = e.target.value / 100; updateGhost(); };
-document.getElementById('showWeld').onchange = e => { S.showWeld = e.target.checked; if (S.result && S.view === 'fill_time') renderFillTime(); };
+document.getElementById('showWeld').onchange = e => { S.showWeld = e.target.checked; if (S.result && S.view === 'fill_time') renderFillTime(); updateBandPanel(); };
 document.getElementById('warpScale').oninput = e => { S.warpScale = Math.round(Math.pow(10, +e.target.value)); applyView(); };
 document.getElementById('view').onchange = e => { S.view = e.target.value; applyView(); };
 document.getElementById('wire').onclick = () => { S.wire = !(S.wire ?? true); if (edgeLines) edgeLines.visible = S.wire; document.getElementById('wire').classList.toggle('active', S.wire); };
