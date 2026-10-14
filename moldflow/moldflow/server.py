@@ -49,7 +49,7 @@ def _r(a, nd=4):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})   # always revalidate the viewer
 
 
 @app.get("/api/materials")

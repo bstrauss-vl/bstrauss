@@ -57,7 +57,8 @@ Then in the UI:
    their trace on the skin. The *CAD opacity* slider sets the ghost; fill time has a play/scrub
    bar with a *weld lines* checkbox and a category panel (meeting-angle ranges, each with its
    own colour or not highlighted) that colours weld cells as the fronts meet;
-   in the weld view they can be filtered by meeting angle; warpage has a deformation-scale slider.
+   the same ranges drive the weld view, where cells outside a shown range are hidden; warpage has a
+   deformation-scale slider.
    Hover for values (in the voxel views: the voxel under the cursor), *Screenshot* saves a PNG.
 
 ### CAD export (automatic)

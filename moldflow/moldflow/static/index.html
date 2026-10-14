@@ -84,8 +84,6 @@
   #spinner .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 22px; }
   .warn { color: var(--accent2); }
   a { color: var(--accent); }
-  #weldfilter { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
-  #weldfilter input { width: 140px; }
   #warpscale { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
   #warpscale input[type=range] { width: 120px; }
   .mono { font-family: var(--mono); }
@@ -194,7 +192,6 @@
         <option value="warp_total">Deflection – incl. shrink (mm)</option>
         <option value="gate_label">Gate region</option>
       </select>
-      <div id="weldfilter"><span class="hint" style="margin:0">meeting angle &lt;</span><input type="range" id="weldAngle" min="10" max="180" value="135"><span class="mono" id="weldAngleV">135°</span></div>
       <div id="warpscale"><span class="hint" style="margin:0">scale ×</span><input type="range" id="warpScale" min="0" max="3" step="0.05" value="1.3"><span class="mono" id="warpScaleV">20</span></div>
       <div id="ghostctl" title="Opacity of the transparent CAD (unfilled part / weld view)"><span class="hint" style="margin:0">CAD opacity</span><input type="range" id="ghost" min="0" max="100" value="15"><span class="mono" id="ghostV">15%</span></div>
       <button class="tbtn" id="wire">Edges</button>
@@ -243,7 +240,7 @@ let partMesh = null, edgeLines = null, ghostMesh = null, voxMesh = null;
 // Fill-time clipping. Each vertex carries its fill time; fragments are clipped against uTime so the
 // melt front cuts smoothly through triangles. 'plastic' keeps the filled part (with a bright band at the
 // front), 'ghost' keeps the not-yet-filled part and is drawn as transparent CAD.
-const FU = { uTime: { value: 1e30 }, uBand: { value: 1 }, uFront: { value: 0 }, uMode: { value: 0 }, uHi: { value: 1 }, uMaxAngle: { value: 180 }, uShowWeld: { value: 1 } };
+const FU = { uTime: { value: 1e30 }, uBand: { value: 1 }, uFront: { value: 0 }, uMode: { value: 0 }, uHi: { value: 1 }, uShowWeld: { value: 1 } };
 const EDGE_DEFAULT = { color: 0x0b0e12, opacity: 0.55 }, EDGE_GHOST = { color: 0x9aa6b8, opacity: 0.3 };
 function withFillClip(mat, mode) {
   mat.onBeforeCompile = sh => {
@@ -300,18 +297,24 @@ const BAND_DEFAULTS = [{ lo: 0, hi: 90, color: '#ff2a2a', show: true }, { lo: 90
 const BAND_KEY = 'moldflow.weldBands';
 function loadBands() { try { const b = JSON.parse(localStorage.getItem(BAND_KEY)); if (Array.isArray(b) && b.length && b.every(x => typeof x.lo === 'number')) return b; } catch (e) {} return BAND_DEFAULTS.map(b => ({ ...b })); }
 S.bands = loadBands();
+const bandAlpha = new Uint8Array(181);   // 1 where a visible range covers the angle (for picking)
 const bandLUT = new THREE.DataTexture(new Uint8Array(181 * 4), 181, 1, THREE.RGBAFormat);
 bandLUT.magFilter = bandLUT.minFilter = THREE.NearestFilter; bandLUT.needsUpdate = true;
 FU.uBandLUT = { value: bandLUT };
 function updateBandLUT() {
-  const d = bandLUT.image.data; d.fill(0); const c = new THREE.Color();
+  const d = bandLUT.image.data; d.fill(0); bandAlpha.fill(0); const c = new THREE.Color();
   for (let a = 0; a <= 180; a++) {
-    const b = S.bands.find(b => { const lo = Math.min(b.lo, b.hi), hi = Math.max(b.lo, b.hi); return b.show && a >= lo && (a < hi || (a === 180 && hi >= 180)); });
-    if (!b) continue;
+    const b = bandFor(a); if (!b) continue;
     c.set(b.color); d[4 * a] = Math.round(c.r * 255); d[4 * a + 1] = Math.round(c.g * 255); d[4 * a + 2] = Math.round(c.b * 255); d[4 * a + 3] = 255;
+    bandAlpha[a] = 1;
   }
   bandLUT.needsUpdate = true;
   try { localStorage.setItem(BAND_KEY, JSON.stringify(S.bands)); } catch (e) {}
+  if (S.result && S.view === 'weld' && !voxMesh && partMesh) renderWeld();   // marker fallback is CPU-built
+}
+// first visible range covering angle a (degrees), or null
+function bandFor(a) {
+  return S.bands.find(b => { const lo = Math.min(b.lo, b.hi), hi = Math.max(b.lo, b.hi); return b.show && a >= lo && (a < hi || (a === 180 && hi >= 180)); }) || null;
 }
 function renderBandRows() {
   const box = document.getElementById('bandrows'); box.innerHTML = '';
@@ -329,7 +332,10 @@ function renderBandRows() {
     box.appendChild(row);
   });
 }
-function updateBandPanel() { document.getElementById('weldbands').style.display = (S.view === 'fill_time' && S.showWeld && voxMesh && voxMesh.visible) ? 'block' : 'none'; }
+function updateBandPanel() {
+  const show = !!S.result && ((S.view === 'fill_time' && S.showWeld && !!voxMesh) || S.view === 'weld');
+  document.getElementById('weldbands').style.display = show ? 'block' : 'none';
+}
 document.getElementById('bandadd').onclick = () => {
   const last = S.bands[S.bands.length - 1]; const lo = last ? Math.min(180, Math.max(last.lo, last.hi)) : 0;
   S.bands.push({ lo, hi: 180, color: '#ffd23a', show: true }); renderBandRows(); updateBandLUT();
@@ -382,12 +388,13 @@ function buildVoxels(vol) {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 attribute vec3 iOff; attribute float iFill; attribute float iWeld;
-uniform float uTime; uniform float uMode; uniform float uMaxAngle;
+uniform float uTime; uniform float uMode; uniform sampler2D uBandLUT;
 varying float vFill; varying float vWeld;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
   transformed += iOff; vFill = iFill; vWeld = iWeld;`)
       .replace('#include <project_vertex>', `#include <project_vertex>
-  bool hide = (uMode < 0.5) ? (iFill > uTime) : (iWeld > uMaxAngle);
+  bool hide = (uMode < 0.5) ? (iFill > uTime)
+    : (iWeld > 180.5 || texture2D(uBandLUT, vec2((clamp(iWeld, 0.0, 180.0) + 0.5) / 181.0, 0.5)).a < 0.5);
   if (hide) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
@@ -403,8 +410,9 @@ vec3 turbo(float t) {
 }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
   vec4 bandCol = texture2D(uBandLUT, vec2((clamp(vWeld, 0.0, 180.0) + 0.5) / 181.0, 0.5));
-  bool weldHi = (uMode < 0.5) && (uShowWeld > 0.5) && (vWeld < 254.0) && (bandCol.a > 0.5);
-  diffuseColor.rgb = weldHi ? bandCol.rgb : turbo((uMode < 0.5) ? vFill / uHi : 1.0 - vWeld / 180.0);`)
+  if (uMode > 0.5 && bandCol.a < 0.5) discard;
+  bool weldHi = (uMode > 0.5) || ((uShowWeld > 0.5) && (vWeld < 254.0) && (bandCol.a > 0.5));
+  diffuseColor.rgb = weldHi ? bandCol.rgb : turbo(vFill / uHi);`)
       .replace('#include <dithering_fragment>', `
   if (uMode < 0.5 && !weldHi) { float fr = uFront * (1.0 - smoothstep(0.0, uBand, uTime - vFill)); gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.97, 0.9), 0.8 * fr); }
 #include <dithering_fragment>`);
@@ -577,8 +585,8 @@ renderer.domElement.addEventListener('pointermove', e => {
   if (!partMesh) { hover.style.display = 'none'; return; }
   let txt = null;
   if (voxMesh && voxMesh.visible && S.vol) {
-    const V = S.vol; const isFill = S.view === 'fill_time'; const tcur = FU.uTime.value, maxA = FU.uMaxAngle.value;
-    const h = voxelPick(e, isFill ? (li => V.fillG[li] <= tcur) : (li => V.weldG[li] <= maxA));
+    const V = S.vol; const isFill = S.view === 'fill_time'; const tcur = FU.uTime.value;
+    const h = voxelPick(e, isFill ? (li => V.fillG[li] <= tcur) : (li => V.weldG[li] < 255 && bandAlpha[V.weldG[li]]));
     if (h) {
       txt = `${fmt(h.point[0], 1)}, ${fmt(h.point[1], 1)}, ${fmt(h.point[2], 1)} mm  ·  Fill time: ${fmt(V.fillG[h.li], 3)} s`;
       if (!isFill || V.weldG[h.li] !== 255) txt += `  ·  ${isFill ? 'Weld line, meeting angle' : 'Meeting angle'}: ${V.weldG[h.li]}°`;
@@ -630,7 +638,6 @@ function applyView() {
   document.getElementById('ghostctl').style.display = S.fillMode ? 'flex' : 'none';
   updateBandPanel();
   document.getElementById('timebar').style.display = v === 'fill_time' ? 'flex' : 'none';
-  document.getElementById('weldfilter').style.display = v === 'weld' ? 'flex' : 'none';
   document.getElementById('warpscale').style.display = (v === 'warp' || v === 'warp_total') ? 'flex' : 'none';
   if (v === 'thickness') {
     const vals = R?.fields.thickness || S.model.thickness; const lo = pct(vals, 0.01), hi = pct(vals, 0.99);
@@ -657,24 +664,22 @@ function renderFillTime() {
   document.getElementById('time').value = Math.round(S.time * 1000);
 }
 function renderWeld() {
-  const maxA = +document.getElementById('weldAngle').value;
-  document.getElementById('weldAngleV').textContent = maxA + '°';
-  if (voxMesh) {   // weld voxels through the whole wall, inside the transparent CAD
-    FU.uMode.value = 1; FU.uMaxAngle.value = maxA; FU.uTime.value = -1e30; FU.uFront.value = 0;
-    drawLegend('Meeting angle (°)  red = head-on', 0, 180, '', true); return;
+  hideLegend(); updateBandPanel();   // the category panel is the legend here
+  if (voxMesh) {   // weld voxels through the whole wall, inside the transparent CAD; ranges from the panel
+    FU.uMode.value = 1; FU.uTime.value = -1e30; FU.uFront.value = 0; return;
   }
   setGray(); const W = S.result.weld;
   const n = W.angle.length; const r = partScale() * 0.0045;
   const geo = new THREE.SphereGeometry(r, 8, 6); const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.4 }), n);
   const M = new THREE.Matrix4(); const c = new THREE.Color(); let k = 0;
   for (let i = 0; i < n; i++) {
-    const a = W.angle[i]; if (a === null || a > maxA) continue;
+    const a = W.angle[i]; if (a === null) continue;
+    const b = bandFor(Math.round(a)); if (!b) continue;
     M.makeTranslation(W.points[3 * i], W.points[3 * i + 1], W.points[3 * i + 2]); mesh.setMatrixAt(k, M);
-    const [rr, gg, bb] = turbo(1 - Math.min(1, a / 180)); c.setRGB(rr, gg, bb); mesh.setColorAt(k, c); k++;
+    c.set(b.color); mesh.setColorAt(k, c); k++;
   }
   mesh.count = k; mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   markerGroup.add(mesh);
-  drawLegend('Meeting angle (°)  red = head-on', 0, 180, '', true);
 }
 function renderAir() {
   const vals = S.result.fields.fill_time; const hi = pct(vals, 1.0); setColors(vals, 0, hi);
@@ -702,7 +707,6 @@ function stepPlayback() {
 }
 document.getElementById('play').onclick = () => { S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
 document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; if (S.result) renderFillTime(); };
-document.getElementById('weldAngle').oninput = () => { if (S.result) renderWeld(); };
 document.getElementById('ghost').oninput = e => { S.ghost = e.target.value / 100; updateGhost(); };
 document.getElementById('showWeld').onchange = e => { S.showWeld = e.target.checked; if (S.result && S.view === 'fill_time') renderFillTime(); updateBandPanel(); };
 document.getElementById('warpScale').oninput = e => { S.warpScale = Math.round(Math.pow(10, +e.target.value)); applyView(); };
