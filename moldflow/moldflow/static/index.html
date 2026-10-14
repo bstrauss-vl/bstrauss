@@ -61,6 +61,10 @@
   #timebar span { font-family: var(--mono); font-size: 12px; min-width: 70px; text-align: right; }
   #timebar label.chk { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 12px; color: var(--text); white-space: nowrap;
     border-left: 1px solid var(--border); padding-left: 10px; cursor: pointer; }
+  #timebar label.spd { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; color: var(--muted); white-space: nowrap;
+    border-left: 1px solid var(--border); padding-left: 10px; }
+  #timebar label.spd input[type=range] { flex: none; width: 80px; }
+  #timebar label.spd span { min-width: 38px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--text); }
   #weldbands { position: absolute; right: 10px; bottom: 72px; width: 262px; background: rgba(29,33,40,.92); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 10px; display: none; }
   #weldbands .title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
@@ -202,7 +206,7 @@
       <button class="tbtn" id="shot">Screenshot</button>
     </div>
     <div id="legend"><div class="title"></div><canvas width="26" height="220"></canvas></div>
-    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span><label class="chk" title="Highlight weld / knit-line cells as the fronts meet"><input type="checkbox" id="showWeld" checked>weld lines</label></div>
+    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span><label class="spd" title="Playback speed (1× plays the whole fill in 5 s)">speed<input type="range" id="speed" min="-1" max="1" step="0.05" value="0"><span id="speedV">1×</span></label><label class="chk" title="Highlight weld / knit-line cells as the fronts meet"><input type="checkbox" id="showWeld" checked>weld lines</label></div>
     <div id="weldbands" title="Weld cells are coloured by the first matching range (meeting angle, degrees); unticked ranges are not highlighted">
       <div class="title">Weld line categories</div>
       <div class="hdr"><span>from °</span><span></span><span>to °</span><span>colour</span><span>show</span><span></span></div>
@@ -220,7 +224,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ------------------------------------------------------------------ state
-const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15, vol: null, showWeld: true };
+const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15, vol: null, showWeld: true, speed: 1 };
 
 // ------------------------------------------------------------------ three.js setup
 const main = document.getElementById('main');
@@ -692,14 +696,22 @@ function renderWarp(total) {
   drawLegend((total ? 'Deflection' : 'Warpage') + ' (mm)', 0, hi);
 }
 // playback
+const PLAY_SECONDS = 5;   // wall-clock seconds for the whole fill at 1x
 let lastT = 0;
 function stepPlayback() {
   if (!S.playing || S.view !== 'fill_time') return;
-  const now = performance.now(); if (now - lastT < 40) return; lastT = now;
-  S.time += 0.008; if (S.time >= 1) { S.time = 1; S.playing = false; document.getElementById('play').textContent = '▶'; }
+  const now = performance.now(); if (!lastT) { lastT = now; return; }
+  const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+  S.time += dt * S.speed / PLAY_SECONDS;
+  if (S.time >= 1) { S.time = 1; S.playing = false; document.getElementById('play').textContent = '▶'; }
   renderFillTime();
 }
-document.getElementById('play').onclick = () => { S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
+document.getElementById('speed').oninput = e => {
+  const x = Math.abs(+e.target.value) < 0.03 ? 0 : +e.target.value;   // snap to 1x
+  S.speed = Math.pow(10, x);
+  document.getElementById('speedV').textContent = (S.speed >= 1 ? S.speed.toFixed(S.speed < 3 ? 1 : 0) : S.speed.toFixed(2)) + '×';
+};
+document.getElementById('play').onclick = () => { lastT = 0; S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
 document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; if (S.result) renderFillTime(); };
 document.getElementById('ghost').oninput = e => { S.ghost = e.target.value / 100; updateGhost(); };
 document.getElementById('showWeld').onchange = e => { S.showWeld = e.target.checked; if (S.result && S.view === 'fill_time') renderFillTime(); updateBandPanel(); };
