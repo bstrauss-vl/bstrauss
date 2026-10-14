@@ -456,7 +456,57 @@ function resize() {
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(main); resize();
-(function loop() { requestAnimationFrame(loop); controls.update(); stepPlayback(); renderer.render(scene, camera); })();
+// ------------------------------------------------------------------ coordinate reference
+// A camera-following XYZ triad in the top-left corner of the view, with the mold-open axis emphasised
+// (double-headed, bright, labelled), plus a double-headed arrow through the part along that axis.
+const AXES = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+const AXIS_COLOR = { x: 0xff5c5c, y: 0x6ee36e, z: 0x5aa9ff };
+const gizmoScene = new THREE.Scene();
+const gizmoCam = new THREE.OrthographicCamera(-1.7, 1.7, 1.7, -1.7, 0.1, 20);
+const GIZMO_PX = 118;
+function makeLabel(text, cssColor, w = 128, h = 64) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const ctx = c.getContext('2d');
+  ctx.font = `bold ${Math.round(h * 0.55)}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.strokeText(text, w / 2, h / 2); ctx.fillStyle = cssColor; ctx.fillText(text, w / 2, h / 2);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true })); sp.scale.set(w / h, 1, 1); return sp;
+}
+function openAxis() { return document.getElementById('axis').value || 'z'; }
+function buildGizmo() {
+  while (gizmoScene.children.length) { const c = gizmoScene.children.pop(); c.traverse?.(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }
+  const open = openAxis();
+  for (const k of ['x', 'y', 'z']) {
+    const dir = new THREE.Vector3(...AXES[k]); const isOpen = k === open;
+    const col = new THREE.Color(AXIS_COLOR[k]); if (!isOpen) col.multiplyScalar(0.6);
+    gizmoScene.add(new THREE.ArrowHelper(dir, new THREE.Vector3(), 1.0, col.getHex(), isOpen ? 0.3 : 0.22, isOpen ? 0.16 : 0.1));
+    if (isOpen) gizmoScene.add(new THREE.ArrowHelper(dir.clone().negate(), new THREE.Vector3(), 1.0, col.getHex(), 0.3, 0.16));
+    const lab = makeLabel(isOpen ? `${k.toUpperCase()} open` : k.toUpperCase(), '#' + col.getHexString());
+    lab.position.copy(dir).multiplyScalar(isOpen ? 1.42 : 1.22); lab.scale.multiplyScalar(isOpen ? 0.5 : 0.36); gizmoScene.add(lab);
+  }
+}
+buildGizmo();
+const openAxisGroup = new THREE.Group(); scene.add(openAxisGroup);
+function updateOpenAxis() {
+  while (openAxisGroup.children.length) { const c = openAxisGroup.children.pop(); c.traverse?.(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }
+  buildGizmo();
+  if (!partMesh) return;
+  const box = new THREE.Box3().setFromObject(partMesh); const c = box.getCenter(new THREE.Vector3()); const size = box.getSize(new THREE.Vector3());
+  const k = openAxis(); const dir = new THREE.Vector3(...AXES[k]); const half = 0.5 * size.getComponent('xyz'.indexOf(k)) + 0.18 * size.length();
+  const head = Math.max(0.05 * half, 0.012 * size.length());
+  for (const d of [dir, dir.clone().negate()]) openAxisGroup.add(new THREE.ArrowHelper(d, c, half, AXIS_COLOR[k], head * 1.8, head));
+  const lab = makeLabel(`mold open ${k.toUpperCase()}`, '#' + new THREE.Color(AXIS_COLOR[k]).getHexString(), 256, 64);
+  lab.position.copy(c).addScaledVector(dir, half + head * 2.2); lab.scale.multiplyScalar(0.06 * size.length()); openAxisGroup.add(lab);
+}
+document.getElementById('axis').onchange = updateOpenAxis;
+function renderGizmo() {
+  const w = main.clientWidth, h = main.clientHeight;
+  gizmoCam.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(6); gizmoCam.up.copy(camera.up); gizmoCam.lookAt(0, 0, 0);
+  renderer.autoClear = false; renderer.clearDepth();
+  renderer.setScissorTest(true); renderer.setViewport(10, h - 56 - GIZMO_PX, GIZMO_PX, GIZMO_PX); renderer.setScissor(10, h - 56 - GIZMO_PX, GIZMO_PX, GIZMO_PX);
+  renderer.render(gizmoScene, gizmoCam);
+  renderer.setScissorTest(false); renderer.setViewport(0, 0, w, h); renderer.autoClear = true;
+}
+(function loop() { requestAnimationFrame(loop); controls.update(); stepPlayback(); renderer.render(scene, camera); renderGizmo(); })();
 
 // ------------------------------------------------------------------ colormap (turbo approximation)
 function turbo(t) {
@@ -517,6 +567,7 @@ function fitView() {
   camera.near = dist / 100; camera.far = dist * 20; camera.updateProjectionMatrix();
   controls.target.copy(center); controls.update();
   grid.position.set(center.x, center.y, box.min.z - r * 0.02); grid.scale.setScalar(r / 60);
+  updateOpenAxis();
 }
 function setColors(values, lo, hi, opts = {}) {
   const col = partMesh.geometry.attributes.color; const a = col.array;

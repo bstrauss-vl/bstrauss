@@ -53,7 +53,8 @@ Then in the UI:
    diameter sets the size of the injection region.
 4. **Process** – leave injection time on *auto* (estimated from part volume) or set it;
    override melt/mold/eject temperatures; set a **core/cavity ΔT** to drive bending warpage;
-   choose the mold-opening axis; toggle the warpage FEA and its element budget.
+   choose the mold-opening axis (the XYZ triad in the corner of the view and the double-headed
+   arrow through the part show which one is selected); toggle the warpage FEA and its element budget.
 5. **Run** – results appear in the view dropdown. **Fill time** and **weld lines** are 3-D
    voxel views: the filled plastic (or the weld cells) are drawn as voxels inside a transparent
    ghost of the CAD, so the melt front and welds *inside* thick walls are visible, not just
