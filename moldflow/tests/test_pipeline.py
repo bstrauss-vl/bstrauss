@@ -1,4 +1,5 @@
 """End-to-end checks on the generated sample parts (run: pytest -q)."""
+import json
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,17 @@ def test_two_gates_meet_in_the_middle(plate):
     assert np.abs(head_on[:, 0]).mean() < 4.0  # fronts meet near x = 0
 
 
+def test_weld_points_cover_the_full_wall(plate):
+    # welds are detected on the 3-D grid; the viewer gets every weld voxel, not just the skin
+    res = simulate(plate, get_material("pp"), [np.array([-49.0, 0.0, 0.0]), np.array([49.0, 0.0, 0.0])],
+                   ProcessParams(), run_warpage=False)
+    pts, ang = weld_points(res)
+    assert len(pts) == int(res.weld_mask.sum()) == res.summary["weld_voxels"]
+    assert np.isfinite(ang).all()
+    # the weld plane spans the plate thickness (several voxel layers), i.e. mid-wall cells are included
+    assert np.ptp(pts[:, 2]) >= plate.pitch
+
+
 def test_uniform_shrink_gives_no_warpage(plate):
     eps = -0.01 * plate.solid.astype(float)
     w = solve_warpage(plate, eps, 0 * eps, 0.38, max_elements=15_000)
@@ -93,6 +105,22 @@ def test_server_roundtrip():
     assert len(d["fields"]["fill_time"]) == up["n_vertices"]
     assert d["warpage"]["fea_elements"] > 1000
     assert d["summary"]["weld_voxels"] > 0
+    # binary 3-D voxel fields for the viewer
+    assert d["volume"]["n_voxels"] > 1000
+    r = c.get(d["volume"]["url"])
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/octet-stream")
+    b = r.content
+    assert b[:4] == b"MFV1"
+    hl = int(np.frombuffer(b[4:8], "<u4")[0]); hdr = json.loads(b[8:8 + hl]); off = 8 + hl
+    n = hdr["n"]
+    assert n == d["volume"]["n_voxels"] and len(b) == off + 9 * n and hdr["shape"] == d["volume"]["shape"]
+    idx = np.frombuffer(b, "<u4", n, off)
+    ft = np.frombuffer(b, "<f4", n, off + 4 * n)
+    w8 = np.frombuffer(b, "u1", n, off + 8 * n)
+    assert idx.max() < np.prod(hdr["shape"]) and np.all(np.diff(idx) > 0)
+    assert np.isfinite(ft).all() and abs(float(ft.max()) - hdr["t_max"]) < 1e-5
+    assert int((w8 != 255).sum()) == d["summary"]["weld_voxels"] == hdr["n_weld"]
+    assert c.get("/api/volume/no-such-run").status_code == 404
 
 
 def test_export_point_cloud_roundtrip(plate, tmp_path):

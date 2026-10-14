@@ -723,21 +723,18 @@ def interpolate_node_field_to_vertices(dom: VoxelDomain, warp: dict, values: np.
 
 
 def weld_points(res: SimulationResult, max_points: int = 20000) -> tuple[np.ndarray, np.ndarray]:
-    """World coordinates of weld voxels (near the surface preferred) and their meeting angle."""
+    """World coordinates (voxel centres) of all weld voxels through the volume and their meeting angle.
+
+    Welds are detected on the full 3-D grid, so for thick walls many of them sit mid-wall; the
+    viewer shows them as voxels inside a transparent part. Randomly subsampled above `max_points`.
+    """
     dom = res.domain
     idx = np.argwhere(res.weld_mask)
     if len(idx) == 0:
         return np.zeros((0, 3)), np.zeros(0)
-    # keep voxels within ~1 voxel of the surface so they are visible, fall back to all
-    near_surf = dom.edt[idx[:, 0], idx[:, 1], idx[:, 2]] <= 1.6 * dom.pitch
-    if near_surf.sum() >= 3:
-        idx = idx[near_surf]
     if len(idx) > max_points:
         sel = np.random.default_rng(0).choice(len(idx), max_points, replace=False)
         idx = idx[sel]
     pts = dom.index_to_world(idx)
-    # push points slightly outward along the surface normal so they sit on the skin
-    n = dom.normal_dir[idx[:, 0], idx[:, 1], idx[:, 2]]
-    pts = pts - n * dom.edt[idx[:, 0], idx[:, 1], idx[:, 2]][:, None]
     ang = res.weld_angle[idx[:, 0], idx[:, 1], idx[:, 2]]
     return pts, ang

@@ -51,9 +51,12 @@ Then in the UI:
 4. **Process** – leave injection time on *auto* (estimated from part volume) or set it;
    override melt/mold/eject temperatures; set a **core/cavity ΔT** to drive bending warpage;
    choose the mold-opening axis; toggle the warpage FEA and its element budget.
-5. **Run** – results appear in the view dropdown. Fill time has a play/scrub bar; weld
-   lines can be filtered by meeting angle; warpage has a deformation-scale slider.
-   Hover for values, *Screenshot* saves a PNG.
+5. **Run** – results appear in the view dropdown. **Fill time** and **weld lines** are 3-D
+   voxel views: the filled plastic (or the weld cells) are drawn as voxels inside a transparent
+   ghost of the CAD, so the melt front and welds *inside* thick walls are visible, not just
+   their trace on the skin. The *CAD opacity* slider sets the ghost; fill time has a play/scrub
+   bar; weld lines can be filtered by meeting angle; warpage has a deformation-scale slider.
+   Hover for values (in the voxel views: the voxel under the cursor), *Screenshot* saves a PNG.
 
 ### CAD export (automatic)
 
@@ -102,8 +105,11 @@ STEP ─cadquery/OCC─▶ B-rep ─tessellate─▶ triangle mesh ─ray parity
           asymmetry from core/cavity ΔT), AMG solve; rigid body & uniform shrink removed
 ```
 
-Everything runs on the same voxel grid, so resolution is one knob. The surface mesh is
-refined for display and fields are sampled from the nearest solid voxel.
+Everything runs on the same voxel grid, so resolution is one knob. Surface fields (pressure,
+temperature, cooling, warpage…) are sampled from the nearest solid voxel onto the refined display
+mesh. Fill time and weld lines are streamed to the viewer as the full 3-D voxel field
+(`/api/volume/<run_id>`, a compact binary of index / fill time / weld angle per solid voxel; the
+server keeps the last three results in memory for this) and drawn as instanced cubes.
 
 ## Assumptions and limitations (read before trusting numbers)
 
@@ -113,9 +119,11 @@ refined for display and fields are sampled from the nearest solid voxel.
   compressibility, no runner system (the gate is a point on the part).
 * **Time scale**: arrival order from fast marching is mapped to real time assuming a
   constant volumetric flow rate; the injection time is user-set or estimated from volume.
-* **Weld lines** are detected geometrically from the arrival-time field. Meeting angle
-  0° = head-on (weakest), >135° is usually considered a meld line. Weld *strength* is not
-  computed; melt-front temperature at the weld is shown in the *front temperature* view.
+* **Weld lines** are detected geometrically from the arrival-time field on the full 3-D grid
+  (converging flow directions / different-gate boundaries), so welds buried in thick sections
+  are found and shown, not only those that reach the skin. Meeting angle 0° = head-on
+  (weakest), >135° is usually considered a meld line. Weld *strength* is not computed;
+  melt-front temperature at the weld is shown in the *front temperature* view.
 * **Pressure** uses mean-velocity Hele-Shaw drop with Cross-WLF viscosity at the local
   wall shear rate (6v/h) and melt temperature; a simple frozen-layer thickness
   (δ ≈ 0.6·√(αt)) reduces the effective gap. Expect under-prediction for long flow lengths
@@ -143,7 +151,7 @@ moldflow/
   geometry.py   STEP import, tessellation, ray-parity voxelizer, thickness
   materials.py  default resin profiles (Cross-WLF, thermal, shrinkage, elastic)
   solver.py     fill / weld / pressure / cooling / warpage
-  server.py     FastAPI endpoints  (/api/upload, /api/simulate, /api/materials)
+  server.py     FastAPI endpoints  (/api/upload, /api/simulate, /api/volume, /api/materials)
   cli.py        headless runner
   static/       index.html viewer (three.js vendored in static/vendor)
 samples/        sample STEP generator

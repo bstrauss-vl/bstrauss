@@ -59,10 +59,8 @@
     border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: none; align-items: center; gap: 10px; }
   #timebar input[type=range] { flex: 1; }
   #timebar span { font-family: var(--mono); font-size: 12px; min-width: 70px; text-align: right; }
-  #timebar .ghostctl { display: flex; align-items: center; gap: 6px; border-left: 1px solid var(--border); padding-left: 10px; }
-  #timebar .ghostctl input[type=range] { flex: 0 0 90px; width: 90px; }
-  #timebar .ghostctl span { min-width: 34px; }
-  #timebar .ghostctl .lbl { font-family: inherit; font-size: 11px; color: var(--muted); min-width: 0; }
+  #ghostctl { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+  #ghostctl input[type=range] { width: 100px; }
   #summary { position: absolute; left: 10px; bottom: 18px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; max-width: 320px; display: none; }
   #summary .kv { font-size: 12px; }
@@ -185,12 +183,13 @@
       </select>
       <div id="weldfilter"><span class="hint" style="margin:0">meeting angle &lt;</span><input type="range" id="weldAngle" min="10" max="180" value="135"><span class="mono" id="weldAngleV">135°</span></div>
       <div id="warpscale"><span class="hint" style="margin:0">scale ×</span><input type="range" id="warpScale" min="0" max="3" step="0.05" value="1.3"><span class="mono" id="warpScaleV">20</span></div>
+      <div id="ghostctl" title="Opacity of the transparent CAD (unfilled part / weld view)"><span class="hint" style="margin:0">CAD opacity</span><input type="range" id="ghost" min="0" max="100" value="15"><span class="mono" id="ghostV">15%</span></div>
       <button class="tbtn" id="wire">Edges</button>
       <button class="tbtn" id="fit">Fit</button>
       <button class="tbtn" id="shot">Screenshot</button>
     </div>
     <div id="legend"><div class="title"></div><canvas width="26" height="220"></canvas></div>
-    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span><div class="ghostctl" title="Opacity of the part that has not filled yet"><span class="lbl">CAD</span><input type="range" id="ghost" min="0" max="100" value="15"><span id="ghostV">15%</span></div></div>
+    <div id="timebar"><button class="tbtn" id="play">▶</button><input type="range" id="time" min="0" max="1000" value="1000"><span id="timeV"></span></div>
     <div id="summary"></div>
     <div id="hover"></div>
     <div id="spinner"><div class="box">Working…</div></div>
@@ -202,7 +201,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ------------------------------------------------------------------ state
-const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15 };
+const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15, vol: null };
 
 // ------------------------------------------------------------------ three.js setup
 const main = document.getElementById('main');
@@ -220,12 +219,12 @@ const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(1, -1.2,
 const fill = new THREE.DirectionalLight(0xffffff, 0.4); fill.position.set(-1.5, 1, -0.5); scene.add(fill);
 const grid = new THREE.GridHelper(200, 20, 0x2b323d, 0x222831); grid.rotation.x = Math.PI / 2; scene.add(grid);
 
-let partMesh = null, edgeLines = null, ghostMesh = null;
+let partMesh = null, edgeLines = null, ghostMesh = null, voxMesh = null;
 
 // Fill-time clipping. Each vertex carries its fill time; fragments are clipped against uTime so the
 // melt front cuts smoothly through triangles. 'plastic' keeps the filled part (with a bright band at the
 // front), 'ghost' keeps the not-yet-filled part and is drawn as transparent CAD.
-const FU = { uTime: { value: 1e30 }, uBand: { value: 1 }, uFront: { value: 0 } };
+const FU = { uTime: { value: 1e30 }, uBand: { value: 1 }, uFront: { value: 0 }, uMode: { value: 0 }, uHi: { value: 1 }, uMaxAngle: { value: 180 } };
 const EDGE_DEFAULT = { color: 0x0b0e12, opacity: 0.55 }, EDGE_GHOST = { color: 0x9aa6b8, opacity: 0.3 };
 function withFillClip(mat, mode) {
   mat.onBeforeCompile = sh => {
@@ -275,6 +274,106 @@ function setFillMode(on) {
   if (edgeLines) { edgeLines.material.color.setHex(e.color); edgeLines.material.opacity = e.opacity; }
   updateGhost();
 }
+
+// ------------------------------------------------------------------ 3-D voxel fields (fill time, weld lines)
+// /api/volume/<run_id>: "MFV1" | u32 header length | JSON header | u32[n] flat index | f32[n] fill time | u8[n] weld angle (255 = none)
+async function loadVolume(url) {
+  const res = await fetch(url); if (!res.ok) throw new Error('volume ' + res.status);
+  const buf = await res.arrayBuffer(); const u8 = new Uint8Array(buf); const dv = new DataView(buf);
+  if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'MFV1') throw new Error('bad volume header');
+  const hl = dv.getUint32(4, true); const hdr = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl)));
+  let off = 8 + hl; const n = hdr.n;
+  const idx = new Uint32Array(buf, off, n); off += 4 * n;
+  const fill = new Float32Array(buf, off, n); off += 4 * n;
+  const weld = new Uint8Array(buf, off, n);
+  const [nx, ny, nz] = hdr.shape; const N = nx * ny * nz;
+  const fillG = new Float32Array(N).fill(NaN); const weldG = new Uint8Array(N).fill(255);   // dense grids for picking
+  for (let i = 0; i < n; i++) { fillG[idx[i]] = fill[i]; weldG[idx[i]] = weld[i]; }
+  return { ...hdr, idx, fill, weld, fillG, weldG };
+}
+function clearVoxels() {
+  if (voxMesh) { scene.remove(voxMesh); voxMesh.geometry.dispose(); voxMesh.material.dispose(); voxMesh = null; }
+  S.vol = null;
+}
+// One instanced cube per solid voxel. The shader hides cubes that are not yet filled (mode 0) or are not
+// weld voxels under the angle filter (mode 1) by collapsing them outside the clip volume, so scrubbing
+// the time bar costs no CPU work and no buffer uploads.
+function buildVoxels(vol) {
+  if (voxMesh) { scene.remove(voxMesh); voxMesh.geometry.dispose(); voxMesh.material.dispose(); voxMesh = null; }
+  const p = vol.pitch, n = vol.n, [nx, ny, nz] = vol.shape, o = vol.origin;
+  const box = new THREE.BoxGeometry(p, p, p);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setIndex(box.getIndex()); g.setAttribute('position', box.getAttribute('position'));
+  g.setAttribute('normal', box.getAttribute('normal')); g.setAttribute('uv', box.getAttribute('uv'));
+  g.instanceCount = n;
+  const off = new Float32Array(3 * n); const nyz = ny * nz;
+  for (let m = 0; m < n; m++) {
+    const li = vol.idx[m]; const i = (li / nyz) | 0; const r = li - i * nyz; const j = (r / nz) | 0; const k = r - j * nz;
+    off[3 * m] = o[0] + i * p; off[3 * m + 1] = o[1] + j * p; off[3 * m + 2] = o[2] + k * p;
+  }
+  g.setAttribute('iOff', new THREE.InstancedBufferAttribute(off, 3));
+  g.setAttribute('iFill', new THREE.InstancedBufferAttribute(Float32Array.from(vol.fill), 1));
+  g.setAttribute('iWeld', new THREE.InstancedBufferAttribute(Float32Array.from(vol.weld), 1));
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.65, metalness: 0.05 });
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, FU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+attribute vec3 iOff; attribute float iFill; attribute float iWeld;
+uniform float uTime; uniform float uMode; uniform float uMaxAngle;
+varying float vFill; varying float vWeld;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+  transformed += iOff; vFill = iFill; vWeld = iWeld;`)
+      .replace('#include <project_vertex>', `#include <project_vertex>
+  bool hide = (uMode < 0.5) ? (iFill > uTime) : (iWeld > uMaxAngle);
+  if (hide) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+uniform float uTime; uniform float uBand; uniform float uFront; uniform float uHi; uniform float uMode;
+varying float vFill; varying float vWeld;
+vec3 turbo(float t) {
+  t = clamp(t, 0.0, 1.0);
+  float r = 34.61 + t * (1172.33 - t * (10793.56 - t * (33300.12 - t * (38394.49 - t * 14825.05))));
+  float g = 23.31 + t * (557.33 + t * (1225.33 - t * (3574.96 - t * (1073.77 + t * 707.56))));
+  float b = 27.2 + t * (3211.1 - t * (15327.97 - t * (27814.0 - t * (22569.18 - t * 6838.66))));
+  return clamp(vec3(r, g, b) / 255.0, 0.0, 1.0);
+}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  diffuseColor.rgb = turbo((uMode < 0.5) ? vFill / uHi : 1.0 - vWeld / 180.0);`)
+      .replace('#include <dithering_fragment>', `
+  if (uMode < 0.5) { float fr = uFront * (1.0 - smoothstep(0.0, uBand, uTime - vFill)); gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.97, 0.9), 0.8 * fr); }
+#include <dithering_fragment>`);
+  };
+  mat.customProgramCacheKey = () => 'voxels';
+  voxMesh = new THREE.Mesh(g, mat); voxMesh.frustumCulled = false; voxMesh.visible = false; scene.add(voxMesh);
+}
+// March the mouse ray through the voxel grid (Amanatides-Woo) to the first voxel accepted by `sel(flatIndex)`.
+function voxelPick(e, sel) {
+  const V = S.vol; if (!V) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(m, camera);
+  const R = raycaster.ray.origin.toArray(), D = raycaster.ray.direction.toArray();
+  const p = V.pitch, dims = V.shape, bmin = V.origin.map(x => x - p / 2);
+  let t0 = 0, t1 = Infinity;
+  for (let a = 0; a < 3; a++) {
+    if (Math.abs(D[a]) < 1e-12) { if (R[a] < bmin[a] || R[a] > bmin[a] + dims[a] * p) return null; continue; }
+    let ta = (bmin[a] - R[a]) / D[a], tb = (bmin[a] + dims[a] * p - R[a]) / D[a]; if (ta > tb) [ta, tb] = [tb, ta];
+    t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return null;
+  }
+  const t = t0 + 1e-6;
+  const ijk = [0, 1, 2].map(a => Math.min(Math.max(Math.floor((R[a] + D[a] * t - bmin[a]) / p), 0), dims[a] - 1));
+  const step = D.map(d => d > 0 ? 1 : -1);
+  const tDelta = D.map(d => Math.abs(d) > 1e-12 ? p / Math.abs(d) : Infinity);
+  const tMax = D.map((d, a) => Math.abs(d) > 1e-12 ? (bmin[a] + (ijk[a] + (d > 0 ? 1 : 0)) * p - R[a]) / d : Infinity);
+  for (let it = 0, lim = dims[0] + dims[1] + dims[2] + 3; it < lim; it++) {
+    const li = (ijk[0] * dims[1] + ijk[1]) * dims[2] + ijk[2];
+    if (sel(li)) return { li, point: [bmin[0] + (ijk[0] + 0.5) * p, bmin[1] + (ijk[1] + 0.5) * p, bmin[2] + (ijk[2] + 0.5) * p] };
+    const a = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : (tMax[1] < tMax[2] ? 1 : 2);
+    ijk[a] += step[a]; if (ijk[a] < 0 || ijk[a] >= dims[a]) return null; tMax[a] += tDelta[a];
+  }
+  return null;
+}
 const gateGroup = new THREE.Group(); scene.add(gateGroup);
 const markerGroup = new THREE.Group(); scene.add(markerGroup);
 const raycaster = new THREE.Raycaster();
@@ -316,6 +415,7 @@ function hideLegend() { legend.style.display = 'none'; }
 function buildPart(model) {
   if (partMesh) { scene.remove(partMesh); partMesh.geometry.dispose(); partMesh.material.dispose(); }
   if (ghostMesh) { scene.remove(ghostMesh); ghostMesh.material.dispose(); ghostMesh = null; }
+  clearVoxels();
   if (edgeLines) { scene.remove(edgeLines); edgeLines = null; }
   const g = new THREE.BufferGeometry();
   const pos = new Float32Array(model.vertices);
@@ -410,11 +510,23 @@ function pick(e) {
 const hover = document.getElementById('hover');
 renderer.domElement.addEventListener('pointermove', e => {
   if (!partMesh) { hover.style.display = 'none'; return; }
-  const hit = pick(e);
-  if (!hit) { hover.style.display = 'none'; return; }
-  const vals = currentVertexValues();
-  let txt = `${fmt(hit.point.x, 1)}, ${fmt(hit.point.y, 1)}, ${fmt(hit.point.z, 1)} mm`;
-  if (vals) { const f = hit.face; const idx = [f.a, f.b, f.c]; const v = idx.map(i => vals.values[i]).filter(x => x !== null && !Number.isNaN(x)); if (v.length) txt += `  ·  ${vals.label}: ${fmt(v.reduce((a, b) => a + b, 0) / v.length, vals.nd)}${vals.unit}`; }
+  let txt = null;
+  if (voxMesh && voxMesh.visible && S.vol) {
+    const V = S.vol; const isFill = S.view === 'fill_time'; const tcur = FU.uTime.value, maxA = FU.uMaxAngle.value;
+    const h = voxelPick(e, isFill ? (li => V.fillG[li] <= tcur) : (li => V.weldG[li] <= maxA));
+    if (h) {
+      txt = `${fmt(h.point[0], 1)}, ${fmt(h.point[1], 1)}, ${fmt(h.point[2], 1)} mm  ·  Fill time: ${fmt(V.fillG[h.li], 3)} s`;
+      if (!isFill) txt += `  ·  Meeting angle: ${V.weldG[h.li]}°`;
+    }
+  } else {
+    const hit = pick(e);
+    if (hit) {
+      const vals = currentVertexValues();
+      txt = `${fmt(hit.point.x, 1)}, ${fmt(hit.point.y, 1)}, ${fmt(hit.point.z, 1)} mm`;
+      if (vals) { const f = hit.face; const idx = [f.a, f.b, f.c]; const v = idx.map(i => vals.values[i]).filter(x => x !== null && !Number.isNaN(x)); if (v.length) txt += `  ·  ${vals.label}: ${fmt(v.reduce((a, b) => a + b, 0) / v.length, vals.nd)}${vals.unit}`; }
+    }
+  }
+  if (!txt) { hover.style.display = 'none'; return; }
   hover.textContent = txt; hover.style.display = 'block';
   const rect = main.getBoundingClientRect(); hover.style.left = (e.clientX - rect.left + 14) + 'px'; hover.style.top = (e.clientY - rect.top + 14) + 'px';
 });
@@ -445,7 +557,12 @@ function currentVertexValues() {
 function applyView() {
   if (!partMesh) return;
   const v = S.view; const R = S.result;
-  clearMarkers(); setDeform(null, 0); setFillMode(v === 'fill_time' && !!R);
+  clearMarkers(); setDeform(null, 0);
+  const vox = !!R && !!voxMesh && (v === 'fill_time' || v === 'weld');   // 3-D voxel views
+  setFillMode(vox || (v === 'fill_time' && !!R));
+  if (voxMesh) voxMesh.visible = vox;
+  partMesh.visible = !vox;
+  document.getElementById('ghostctl').style.display = S.fillMode ? 'flex' : 'none';
   document.getElementById('timebar').style.display = v === 'fill_time' ? 'flex' : 'none';
   document.getElementById('weldfilter').style.display = v === 'weld' ? 'flex' : 'none';
   document.getElementById('warpscale').style.display = (v === 'warp' || v === 'warp_total') ? 'flex' : 'none';
@@ -465,16 +582,21 @@ function applyView() {
   setColors(vals, lo, hi, { reversed: rev }); drawLegend(`${VIEWS[v].label} (${VIEWS[v].unit.trim()})`, lo, hi, '', rev);
 }
 function renderFillTime() {
-  const vals = S.result.fields.fill_time; const hi = pct(vals, 1.0); const tcur = S.time * hi;
-  setFillAttr(vals); setColors(vals, 0, hi);
+  const vals = S.result.fields.fill_time; const hi = S.vol ? S.vol.t_max : pct(vals, 1.0); const tcur = S.time * hi;
+  if (voxMesh) { FU.uMode.value = 0; FU.uHi.value = Math.max(hi, 1e-9); } else { setFillAttr(vals); setColors(vals, 0, hi); }
   FU.uTime.value = tcur + 1e-9; FU.uBand.value = Math.max(hi * 0.02, 1e-6); FU.uFront.value = S.time < 1 ? 1 : 0;
   drawLegend('Fill time (s)', 0, hi);
   document.getElementById('timeV').textContent = fmt(tcur, 3) + ' s';
   document.getElementById('time').value = Math.round(S.time * 1000);
 }
 function renderWeld() {
-  setGray(); const W = S.result.weld; const maxA = +document.getElementById('weldAngle').value;
+  const maxA = +document.getElementById('weldAngle').value;
   document.getElementById('weldAngleV').textContent = maxA + '°';
+  if (voxMesh) {   // weld voxels through the whole wall, inside the transparent CAD
+    FU.uMode.value = 1; FU.uMaxAngle.value = maxA; FU.uTime.value = -1e30; FU.uFront.value = 0;
+    drawLegend('Meeting angle (°)  red = head-on', 0, 180, '', true); return;
+  }
+  setGray(); const W = S.result.weld;
   const n = W.angle.length; const r = partScale() * 0.0045;
   const geo = new THREE.SphereGeometry(r, 8, 6); const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.4 }), n);
   const M = new THREE.Matrix4(); const c = new THREE.Color(); let k = 0;
@@ -512,8 +634,8 @@ function stepPlayback() {
   renderFillTime();
 }
 document.getElementById('play').onclick = () => { S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
-document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; renderFillTime(); };
-document.getElementById('weldAngle').oninput = () => renderWeld();
+document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; if (S.result) renderFillTime(); };
+document.getElementById('weldAngle').oninput = () => { if (S.result) renderWeld(); };
 document.getElementById('ghost').oninput = e => { S.ghost = e.target.value / 100; updateGhost(); };
 document.getElementById('warpScale').oninput = e => { S.warpScale = Math.round(Math.pow(10, +e.target.value)); applyView(); };
 document.getElementById('view').onchange = e => { S.view = e.target.value; applyView(); };
@@ -606,7 +728,13 @@ document.getElementById('run').onclick = async () => {
   try {
     const res = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!res.ok) { setStatus((await res.json()).detail || 'Simulation failed', 'err'); return; }
-    S.result = await res.json(); showResults();
+    S.result = await res.json(); clearVoxels();
+    if (S.result.volume) {
+      busy(true, 'Loading 3-D voxel fields…');
+      try { S.vol = await loadVolume(S.result.volume.url); buildVoxels(S.vol); }
+      catch (err) { console.warn('voxel volume unavailable, using surface display', err); S.vol = null; }
+    }
+    showResults();
     S.view = 'fill_time'; document.getElementById('view').value = 'fill_time'; S.time = 1; applyView();
     setStatus(`Done in ${S.result.timings.total}s.`, 'ok');
   } catch (e) { setStatus('Error: ' + e.message, 'err'); }
@@ -623,6 +751,7 @@ function showResults() {
     'Weld lines': weldTxt, 'Air-trap candidates': s.air_trap_count,
     'Cooling time (98%)': fmt(s.cooling_time_s, 1) + ' s', 'Cycle time (est.)': fmt(s.cycle_time_est_s, 1) + ' s',
   };
+  if (S.vol) rows['Voxel grid'] = `${S.vol.n.toLocaleString()} cells @ ${fmt(S.vol.pitch, 2)} mm`;
   if (W) { rows['Max warpage'] = fmt(s.max_warpage_mm, 3) + ' mm'; rows['Max deflection (incl. shrink)'] = fmt(s.max_deflection_total_mm, 3) + ' mm'; rows['FEA'] = `${W.fea_elements.toLocaleString()} hex @ ${fmt(W.fea_pitch_mm, 2)} mm`; }
   document.getElementById('results').style.display = 'block';
   document.getElementById('reskv').innerHTML = kv(rows);

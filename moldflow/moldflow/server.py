@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 import os
 import re
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,8 @@ app = FastAPI(title="moldflow", version=__version__)
 
 _MODELS: dict[str, dict] = {}        # model_id -> {"mesh":..., "dom":..., "name":...}
 _EXPORTS: dict[str, Path] = {}       # run_id -> export directory
+_RESULTS: "OrderedDict[str, SimulationResult]" = OrderedDict()   # run_id -> result (last few, for /api/volume)
+MAX_CACHED_RESULTS = 3
 EXPORT_ROOT = Path(os.environ.get("MOLDFLOW_EXPORT_DIR", Path.cwd() / "moldflow_results"))
 RESOLUTIONS = {"coarse": 50_000, "medium": 120_000, "fine": 250_000, "ultra": 500_000}
 
@@ -155,9 +159,13 @@ def run_simulation(req: SimRequest):
         raise HTTPException(500, f"Simulation failed: {e}")
     total = time.perf_counter() - t0
     payload = _result_payload(res, total)
+    stem = Path(entry["name"] or "part").stem
+    run_id = f"{re.sub(r'[^A-Za-z0-9_.-]+', '_', stem)[:60]}_{time.strftime('%Y%m%d-%H%M%S')}"
+    _remember_result(run_id, res)
+    payload["run_id"] = run_id
+    payload["volume"] = {"url": f"/api/volume/{run_id}", "n_voxels": int(dom.solid.sum()),
+                         "shape": [int(x) for x in dom.shape], "pitch_mm": round(float(dom.pitch), 4)}
     if req.export:
-        stem = Path(entry["name"] or "part").stem
-        run_id = f"{re.sub(r'[^A-Za-z0-9_.-]+', '_', stem)[:60]}_{time.strftime('%Y%m%d-%H%M%S')}"
         out_dir = Path(req.export_dir) if req.export_dir else EXPORT_ROOT / run_id
         try:
             info = export_results(res, out_dir, [list(map(float, g)) for g in req.gates], prefix=stem)
@@ -166,6 +174,46 @@ def run_simulation(req: SimRequest):
         except Exception as e:  # noqa: BLE001
             payload["export"] = {"error": f"export failed: {e}"}
     return JSONResponse(payload)
+
+
+def _remember_result(run_id: str, res: SimulationResult) -> None:
+    _RESULTS[run_id] = res
+    while len(_RESULTS) > MAX_CACHED_RESULTS:
+        _RESULTS.popitem(last=False)
+
+
+def encode_volume(res: SimulationResult) -> bytes:
+    """Binary 3-D voxel fields for the viewer (little-endian):
+
+        b"MFV1" | uint32 header_len | header JSON (padded to 4 bytes)
+        | uint32[n]  flat C-order index of every solid voxel
+        | float32[n] fill time (s; +inf = never filled)
+        | uint8[n]   weld meeting angle in degrees (255 = not a weld voxel)
+
+    The header carries shape, pitch, origin (world position of voxel (0,0,0) centre), n and t_max.
+    """
+    dom = res.domain
+    solid = dom.solid
+    idx = np.flatnonzero(solid.ravel(order="C")).astype("<u4")
+    ft = res.fill_time[solid]
+    ft = np.where(np.isfinite(ft), ft, np.inf).astype("<f4")
+    wa = res.weld_angle[solid]
+    w8 = np.where(np.isfinite(wa), np.clip(np.rint(wa), 0, 180), 255).astype(np.uint8)
+    hdr = {"shape": [int(x) for x in dom.shape], "pitch": float(dom.pitch), "origin": [float(x) for x in dom.origin],
+           "n": int(len(idx)), "t_max": float(np.nanmax(res.fill_time)) if np.isfinite(res.fill_time).any() else 0.0,
+           "n_weld": int((w8 != 255).sum())}
+    hb = json.dumps(hdr).encode("utf-8")
+    hb += b" " * (-len(hb) % 4)
+    return b"".join([b"MFV1", np.uint32(len(hb)).tobytes(), hb, idx.tobytes(), ft.tobytes(), w8.tobytes()])
+
+
+@app.get("/api/volume/{run_id}")
+def volume(run_id: str):
+    res = _RESULTS.get(run_id)
+    if res is None:
+        raise HTTPException(404, "Unknown run (results are kept in memory for the last few runs only - rerun the simulation).")
+    return Response(content=encode_volume(res), media_type="application/octet-stream",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/export/{run_id}/{filename}")
