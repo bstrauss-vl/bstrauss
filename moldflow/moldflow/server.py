@@ -58,7 +58,8 @@ def materials():
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), resolution: str = "medium"):
+async def upload(file: UploadFile = File(...), resolution: str = "medium", target_voxels: Optional[int] = None):
+    """Mesh a CAD file. `resolution` picks a preset; `target_voxels` (10k .. 20M) overrides it with a custom cell count."""
     suffix = Path(file.filename or "part.step").suffix.lower()
     if suffix not in (".step", ".stp", ".stl", ".obj", ".ply"):
         raise HTTPException(400, "Upload a .step/.stp file (STL/OBJ/PLY also accepted).")
@@ -78,7 +79,11 @@ async def upload(file: UploadFile = File(...), resolution: str = "medium"):
             pass
     t_load = time.perf_counter() - t0
     t0 = time.perf_counter()
-    target = RESOLUTIONS.get(resolution, RESOLUTIONS["medium"])
+    if target_voxels:
+        target = int(np.clip(target_voxels, 10_000, 20_000_000))
+        resolution = f"custom:{target}"
+    else:
+        target = RESOLUTIONS.get(resolution, RESOLUTIONS["medium"])
     try:
         dom = voxelize(mesh, target_voxels=target)
     except Exception as e:  # noqa: BLE001

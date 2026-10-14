@@ -25,6 +25,7 @@ def main(argv=None):
     ap.add_argument("--material", default="abs", choices=sorted(MATERIALS))
     ap.add_argument("--gate", action="append", required=True, help="x,y,z in mm (repeat for multiple gates)")
     ap.add_argument("--resolution", default="medium", choices=sorted(RESOLUTIONS))
+    ap.add_argument("--voxels", type=int, help="custom target cell count (overrides --resolution; ~1.6 GB RAM and ~2 min per million)")
     ap.add_argument("--injection-time", type=float)
     ap.add_argument("--melt", type=float); ap.add_argument("--mold", type=float); ap.add_argument("--eject", type=float)
     ap.add_argument("--dT", type=float, default=0.0, help="core/cavity temperature difference, °C")
@@ -37,7 +38,7 @@ def main(argv=None):
 
     t0 = time.perf_counter()
     mesh = load_mesh_any(a.step)
-    dom = voxelize(mesh, target_voxels=RESOLUTIONS[a.resolution])
+    dom = voxelize(mesh, target_voxels=a.voxels if a.voxels else RESOLUTIONS[a.resolution])
     gates = [np.array([float(v) for v in g.split(",")]) for g in a.gate]
     params = ProcessParams(injection_time_s=a.injection_time, melt_temp_c=a.melt, mold_temp_c=a.mold,
                            eject_temp_c=a.eject, core_cavity_dT_c=a.dT)

@@ -43,7 +43,9 @@ moldflow
 Then in the UI:
 
 1. **Part** – drop a `.step` (STL/OBJ also accepted). Units are read as mm. Choose the
-   mesh resolution (coarse ≈ 50k cells … ultra ≈ 500k). The thickness map appears at once.
+   mesh resolution (coarse ≈ 50k cells … ultra ≈ 500k) or type a custom cell count (up to
+   20 M; budget about 1.6 GB RAM and 2 min per million cells, so 2 M ≈ 3–4 min). The
+   thickness map appears at once.
 2. **Material** – pick a profile; its Cross-WLF viscosity, temperatures, shrinkage and
    modulus are shown. Edit `moldflow/materials.py` to add your own grades.
 3. **Gates** – click the model to add a gate (shift-click removes the nearest). Gate
@@ -84,6 +86,7 @@ also read vertex points) — no transform is needed, the points land on the mode
 
 ```bat
 moldflow-cli samples\plate_with_hole.step --material abs --gate -49,0,0 --gate 49,0,0 --out result.json
+moldflow-cli part.step --material abs --gate 10,0,5 --voxels 1500000 --no-warpage   # custom cell count
 ```
 
 ### Sample parts

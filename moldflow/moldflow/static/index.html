@@ -111,6 +111,9 @@
       <option value="fine">Fine (≈250k cells)</option>
       <option value="ultra">Ultra (≈500k cells, slow)</option>
     </select>
+    <label>Custom cell count <span style="color:var(--muted)">(optional, overrides the preset)</span></label>
+    <input type="number" id="targetCells" min="10000" max="20000000" step="10000" placeholder="e.g. 1000000">
+    <div class="hint">About 1.6 GB RAM and 2 min per million cells; 2 M ≈ 3–4 min. Clear the field to use the preset.</div>
     <div id="partinfo" class="card" style="display:none; margin-top:10px">
       <div class="kv" id="partkv"></div>
     </div>
@@ -728,9 +731,11 @@ function setStatus(msg, cls = '') { status.textContent = msg; status.className =
 function busy(on, msg) { spinner.style.display = on ? 'flex' : 'none'; if (msg) spinner.querySelector('.box').textContent = msg; }
 
 async function uploadFile(file) {
-  busy(true, `Reading ${file.name} and voxelizing…`); setStatus('Uploading & meshing…');
+  const tv = parseInt(document.getElementById('targetCells').value, 10);
+  const custom = tv > 0 ? Math.min(20000000, Math.max(10000, tv)) : 0;
+  busy(true, `Reading ${file.name} and voxelizing${custom > 600000 ? ` at ${custom.toLocaleString()} cells – this can take a few minutes` : ''}…`); setStatus('Uploading & meshing…');
   const fd = new FormData(); fd.append('file', file);
-  const res = await fetch('/api/upload?resolution=' + document.getElementById('resolution').value, { method: 'POST', body: fd });
+  const res = await fetch('/api/upload?resolution=' + document.getElementById('resolution').value + (custom ? '&target_voxels=' + custom : ''), { method: 'POST', body: fd });
   busy(false);
   if (!res.ok) { setStatus((await res.json()).detail || 'Upload failed', 'err'); return; }
   S.model = await res.json(); S.result = null; S.gates = []; S.view = 'thickness'; document.getElementById('view').value = 'thickness';
