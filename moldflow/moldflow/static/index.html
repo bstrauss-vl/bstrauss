@@ -79,6 +79,8 @@
   #weldbands .foot button { padding: 3px 8px; font-size: 11px; }
   #ghostctl { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
   #ghostctl input[type=range] { width: 100px; }
+  #voxctl { display: none; align-items: center; gap: 8px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+  #voxctl input[type=range] { width: 100px; }
   #summary { position: absolute; left: 10px; bottom: 18px; background: rgba(29,33,40,.92); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; max-width: 320px; display: none; }
   #summary .kv { font-size: 12px; }
@@ -202,7 +204,8 @@
         <option value="gate_label">Gate region</option>
       </select>
       <div id="warpscale"><span class="hint" style="margin:0">scale ×</span><input type="range" id="warpScale" min="0" max="3" step="0.05" value="1.3"><span class="mono" id="warpScaleV">20</span></div>
-      <div id="ghostctl" title="Opacity of the transparent CAD (unfilled part / weld view)"><span class="hint" style="margin:0">CAD opacity</span><input type="range" id="ghost" min="0" max="100" value="15"><span class="mono" id="ghostV">15%</span></div>
+      <div id="ghostctl" title="Opacity of the transparent CAD shell drawn over the voxel field"><span class="hint" style="margin:0">CAD opacity</span><input type="range" id="ghost" min="0" max="100" value="15"><span class="mono" id="ghostV">15%</span></div>
+      <div id="voxctl" title="Opacity of the voxel field (lower it to look inside)"><span class="hint" style="margin:0">Voxel opacity</span><input type="range" id="voxop" min="10" max="100" value="100"><span class="mono" id="voxopV">100%</span></div>
       <button class="tbtn" id="wire">Edges</button>
       <button class="tbtn" id="fit">Fit</button>
       <button class="tbtn" id="shot">Screenshot</button>
@@ -226,7 +229,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ------------------------------------------------------------------ state
-const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15, vol: null, showWeld: true, speed: 1 };
+const S = { model: null, result: null, gates: [], view: 'thickness', materials: [], time: 1, playing: false, warpScale: 20, ghost: 0.15, vol: null, showWeld: true, speed: 1, voxOpacity: 1 };
 
 // ------------------------------------------------------------------ three.js setup
 const main = document.getElementById('main');
@@ -260,7 +263,7 @@ attribute float fillTime;
 varying float vFill;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
   vFill = fillTime;`);
-    const clip = mode === 'ghost' ? 'if (vFill <= uTime) discard;' : 'if (vFill > uTime) discard;';
+    const clip = mode === 'ghost' ? '' : 'if (vFill > uTime) discard;';
     let fs = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform float uTime;
@@ -277,6 +280,13 @@ function setFillAttr(vals) {
   const a = partMesh.geometry.attributes.fillTime.array;
   for (let i = 0; i < a.length; i++) { const v = vals[i]; a[i] = (v === null || v === undefined || Number.isNaN(v)) ? 1e9 : v; }
   partMesh.geometry.attributes.fillTime.needsUpdate = true; partMesh.userData.fillSrc = vals;
+}
+function updateVoxOpacity() {
+  document.getElementById('voxopV').textContent = Math.round(S.voxOpacity * 100) + '%';
+  if (!voxMesh) return;
+  const m = voxMesh.material; const solid = S.voxOpacity >= 0.995;
+  if (m.transparent === solid) { m.transparent = !solid; m.needsUpdate = true; }
+  m.opacity = S.voxOpacity; m.depthWrite = solid;   // no depth write when see-through, so inner cells show
 }
 function updateGhost() {
   document.getElementById('ghostV').textContent = Math.round(S.ghost * 100) + '%';
@@ -419,6 +429,7 @@ vec3 turbo(float t) {
   };
   mat.customProgramCacheKey = () => 'voxels';
   voxMesh = new THREE.Mesh(g, mat); voxMesh.frustumCulled = false; voxMesh.visible = false; scene.add(voxMesh);
+  updateVoxOpacity();
 }
 // March the mouse ray through the voxel grid (Amanatides-Woo) to the first voxel accepted by `sel(flatIndex)`.
 function voxelPick(e, sel) {
@@ -495,7 +506,7 @@ function updateOpenAxis() {
   const head = Math.max(0.05 * half, 0.012 * size.length());
   for (const d of [dir, dir.clone().negate()]) openAxisGroup.add(new THREE.ArrowHelper(d, c, half, AXIS_COLOR[k], head * 1.8, head));
   const lab = makeLabel(`mold open ${k.toUpperCase()}`, '#' + new THREE.Color(AXIS_COLOR[k]).getHexString(), 256, 64);
-  lab.position.copy(c).addScaledVector(dir, half + head * 2.2); lab.scale.multiplyScalar(0.06 * size.length()); openAxisGroup.add(lab);
+  lab.position.copy(c).addScaledVector(dir, half + head * 2.2); lab.scale.multiplyScalar(0.02 * size.length()); lab.material.opacity = 0.3; openAxisGroup.add(lab);
 }
 document.getElementById('axis').onchange = updateOpenAxis;
 function renderGizmo() {
@@ -695,6 +706,7 @@ function applyView() {
   if (voxMesh) voxMesh.visible = vox;
   partMesh.visible = !vox;
   document.getElementById('ghostctl').style.display = S.fillMode ? 'flex' : 'none';
+  document.getElementById('voxctl').style.display = vox ? 'flex' : 'none';
   updateBandPanel();
   document.getElementById('timebar').style.display = v === 'fill_time' ? 'flex' : 'none';
   document.getElementById('warpscale').style.display = (v === 'warp' || v === 'warp_total') ? 'flex' : 'none';
@@ -775,6 +787,7 @@ document.getElementById('speed').oninput = e => {
 document.getElementById('play').onclick = () => { lastT = 0; S.playing = !S.playing; if (S.playing && S.time >= 1) S.time = 0; document.getElementById('play').textContent = S.playing ? '❚❚' : '▶'; };
 document.getElementById('time').oninput = e => { S.playing = false; S.time = e.target.value / 1000; if (S.result) renderFillTime(); };
 document.getElementById('ghost').oninput = e => { S.ghost = e.target.value / 100; updateGhost(); };
+document.getElementById('voxop').oninput = e => { S.voxOpacity = e.target.value / 100; updateVoxOpacity(); };
 document.getElementById('showWeld').onchange = e => { S.showWeld = e.target.checked; if (S.result && S.view === 'fill_time') renderFillTime(); updateBandPanel(); };
 document.getElementById('warpScale').oninput = e => { S.warpScale = Math.round(Math.pow(10, +e.target.value)); applyView(); };
 document.getElementById('view').onchange = e => { S.view = e.target.value; applyView(); };

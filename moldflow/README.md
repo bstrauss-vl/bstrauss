@@ -58,7 +58,8 @@ Then in the UI:
 5. **Run** – results appear in the view dropdown. **Fill time** and **weld lines** are 3-D
    voxel views: the filled plastic (or the weld cells) are drawn as voxels inside a transparent
    ghost of the CAD, so the melt front and welds *inside* thick walls are visible, not just
-   their trace on the skin. The *CAD opacity* slider sets the ghost; fill time has a play/scrub
+   their trace on the skin. *CAD opacity* sets the transparent CAD shell drawn over the voxels and
+   *Voxel opacity* lets you look into the voxel field; fill time has a play/scrub
    bar with a *weld lines* checkbox and a category panel (meeting-angle ranges, each with its
    own colour or not highlighted) that colours weld cells as the fronts meet;
    the same ranges drive the weld view, where cells outside a shown range are hidden; warpage has a
